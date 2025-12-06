@@ -130,40 +130,40 @@ def submit():
             progress_data['should_stop'] = False
         
         def record_survey_and_deduct_points(uid, survey_url, status):
-            """记录问卷填写并扣积分"""
+            """记录问卷填写并增加积分"""
             try:
                 conn = get_db_connection()
                 with conn.cursor() as cur:
-                    # 只在成功时扣积分
+                    # 只在成功时增加积分
                     if status == 'success':
-                        # 扣1个积分
-                        cur.execute('UPDATE users SET points = points - 1 WHERE id = %s AND points > 0', (uid,))
+                        # 增加1个积分
+                        cur.execute('UPDATE users SET points = points + 1 WHERE id = %s', (uid,))
                         
                         # 记录问卷填写
                         cur.execute(
                             'INSERT INTO survey_records (user_id, survey_url, status, points_deducted) VALUES (%s, %s, %s, %s)',
-                            (uid, survey_url, status, 1)
+                            (uid, survey_url, status, -1)
                         )
                         
                         # 记录积分日志
                         cur.execute(
                             'INSERT INTO points_log (user_id, points_change, reason) VALUES (%s, %s, %s)',
-                            (uid, -1, f'填写问卷: {survey_url}')
+                            (uid, 1, f'填写问卷: {survey_url}')
                         )
                         
-                        print(f"用户 {uid} 成功填写问卷，扣除1个积分")
+                        print(f"用户 {uid} 成功填写问卷，增加1个积分")
                     else:
-                        # 失败或错误时不扣积分，但记录
+                        # 失败或错误时不增加积分，但记录
                         cur.execute(
                             'INSERT INTO survey_records (user_id, survey_url, status, points_deducted) VALUES (%s, %s, %s, %s)',
                             (uid, survey_url, status, 0)
                         )
-                        print(f"用户 {uid} 填写问卷失败，不扣积分")
+                        print(f"用户 {uid} 填写问卷失败，不增加积分")
                 
                 conn.commit()
                 conn.close()
             except Exception as e:
-                print(f"记录问卷和扣积分时出错: {e}")
+                print(f"记录问卷和增加积分时出错: {e}")
         
         # 使用线程池并行填写
         def fill_single_survey(survey_index):
