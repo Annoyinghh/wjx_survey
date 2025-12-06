@@ -69,22 +69,16 @@
         <h2 class="mb-1 text-center auth-title">登录</h2>
         <p class="text-center mb-4 auth-subtitle">使用账号登录问卷星自动填答系统</p>
         
-        <!-- 登录类型选择 -->
-        <div class="tab-buttons">
-            <button class="tab-btn active" onclick="switchTab('user')">用户登录</button>
-            <button class="tab-btn" onclick="switchTab('admin')">管理员登录</button>
-        </div>
-
-        <!-- 用户登录表单 -->
-        <div id="userForm" class="form-section active">
-            <form id="userLoginForm">
+        <!-- 统一登录表单 -->
+        <div id="loginForm" class="form-section active">
+            <form id="mainLoginForm">
                 <div class="mb-3">
-                    <label for="userEmail" class="form-label">邮箱</label>
-                    <input type="email" class="form-control" id="userEmail" required>
+                    <label for="loginEmail" class="form-label">账号</label>
+                    <input type="text" class="form-control" id="loginEmail" placeholder="邮箱或管理员账号" required>
                 </div>
                 <div class="mb-3">
-                    <label for="userPassword" class="form-label">密码</label>
-                    <input type="password" class="form-control" id="userPassword" required>
+                    <label for="loginPassword" class="form-label">密码</label>
+                    <input type="password" class="form-control" id="loginPassword" required>
                 </div>
                 <button type="submit" class="btn btn-primary w-100">登录</button>
                 <div class="mt-3 text-center">
@@ -93,85 +87,35 @@
             </form>
         </div>
 
-        <!-- 管理员登录表单 -->
-        <div id="adminForm" class="form-section">
-            <form id="adminLoginForm">
-                <div class="mb-3">
-                    <label for="adminUsername" class="form-label">用户名</label>
-                    <input type="text" class="form-control" id="adminUsername" required>
-                </div>
-                <div class="mb-3">
-                    <label for="adminPassword" class="form-label">密码</label>
-                    <input type="password" class="form-control" id="adminPassword" required>
-                </div>
-                <button type="submit" class="btn btn-primary w-100">登录</button>
-            </form>
-        </div>
-
         <div id="result" class="mt-3"></div>
     </div>
 </div>
 
 <script>
-    function switchTab(type) {
-        // 更新按钮状态
-        document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
-        event.target.classList.add('active');
-        
-        // 显示对应表单
-        document.querySelectorAll('.form-section').forEach(form => form.classList.remove('active'));
-        if (type === 'user') {
-            document.getElementById('userForm').classList.add('active');
-        } else {
-            document.getElementById('adminForm').classList.add('active');
-        }
-        
-        // 清空结果
-        document.getElementById('result').innerHTML = '';
-    }
-
-    // 用户登录
-    document.getElementById('userLoginForm').addEventListener('submit', async function(e) {
+    // 统一登录处理
+    document.getElementById('mainLoginForm').addEventListener('submit', async function(e) {
         e.preventDefault();
-        const email = document.getElementById('userEmail').value.trim();
-        const password = document.getElementById('userPassword').value;
+        const email = document.getElementById('loginEmail').value.trim();
+        const password = document.getElementById('loginPassword').value;
         const resultDiv = document.getElementById('result');
         resultDiv.innerHTML = '';
+        
         try {
             const res = await fetch('/user/login', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ email, password, type: 'user' })
+                body: JSON.stringify({ email, password })
             });
             const data = await res.json();
             if (data.status === 'success') {
+                // 清除所有本地存储和缓存
+                localStorage.clear();
+                sessionStorage.clear();
+                
                 resultDiv.innerHTML = '<div class="alert alert-success">登录成功，正在跳转...</div>';
-                setTimeout(() => { window.location.href = '/index.html'; }, 1000);
-            } else {
-                resultDiv.innerHTML = `<div class="alert alert-danger">${data.message}</div>`;
-            }
-        } catch (err) {
-            resultDiv.innerHTML = `<div class="alert alert-danger">请求失败：${err}</div>`;
-        }
-    });
-
-    // 管理员登录
-    document.getElementById('adminLoginForm').addEventListener('submit', async function(e) {
-        e.preventDefault();
-        const email = document.getElementById('adminUsername').value.trim();
-        const password = document.getElementById('adminPassword').value;
-        const resultDiv = document.getElementById('result');
-        resultDiv.innerHTML = '';
-        try {
-            const res = await fetch('/user/login', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ email, password, type: 'admin' })
-            });
-            const data = await res.json();
-            if (data.status === 'success') {
-                resultDiv.innerHTML = '<div class="alert alert-success">登录成功，正在跳转...</div>';
-                setTimeout(() => { window.location.href = '/admin.html'; }, 1000);
+                // 根据角色跳转到不同页面
+                const redirectUrl = data.role === 'admin' ? '/admin.html' : '/index.html';
+                setTimeout(() => { window.location.href = redirectUrl; }, 1000);
             } else {
                 resultDiv.innerHTML = `<div class="alert alert-danger">${data.message}</div>`;
             }

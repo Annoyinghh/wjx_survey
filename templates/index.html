@@ -95,6 +95,7 @@
                     <div class="mt-3 mt-md-0 d-flex flex-column align-items-end gap-2">
                         <button class="btn btn-success btn-sm" id="signinBtn">签到</button>
                         <button class="btn btn-warning btn-sm" id="rechargeBtn">充值积分</button>
+                        <button class="btn btn-info btn-sm" id="rechargeHistoryBtn">充值记录</button>
                         <button class="btn btn-secondary btn-sm" id="editPasswordBtn">修改密码</button>
                         <button class="btn btn-outline-danger btn-sm" id="logoutBtn">登出</button>
                     </div>
@@ -616,25 +617,42 @@
 
         // 个人信息区相关JS
         async function loadProfile() {
-            const res = await fetch('/user/profile');
-            if (res.status === 401) { window.location.href = '/login.html'; return; }
-            const data = await res.json();
-            if (data.status === 'success') {
-                const u = data.data;
-                // 普通用户显示
-                if (data.role === 'user') {
-                    document.getElementById('profileEmail').textContent = u.email;
-                    document.getElementById('profileUsername').textContent = u.username;
-                    document.getElementById('profilePoints').textContent = u.points;
-                    document.getElementById('profileRole').textContent = '普通用户';
-                    document.getElementById('profileCreated').textContent = u.created_at;
-                } else {
-                    // 管理员不应该在这个页面
-                    window.location.href = '/admin.html';
+            try {
+                const res = await fetch('/user/profile');
+                if (res.status === 401) {
+                    // 清除缓存并重定向
+                    localStorage.clear();
+                    sessionStorage.clear();
+                    window.location.href = '/login.html';
                     return;
                 }
-                document.getElementById('userInfo').style.display = '';
-            } else {
+                const data = await res.json();
+                if (data.status === 'success') {
+                    const u = data.data;
+                    // 普通用户显示
+                    if (data.role === 'user') {
+                        document.getElementById('profileEmail').textContent = u.email;
+                        document.getElementById('profileUsername').textContent = u.username;
+                        document.getElementById('profilePoints').textContent = u.points;
+                        document.getElementById('profileRole').textContent = '普通用户';
+                        document.getElementById('profileCreated').textContent = u.created_at;
+                    } else {
+                        // 管理员不应该在这个页面，清除缓存并重定向
+                        localStorage.clear();
+                        sessionStorage.clear();
+                        window.location.href = '/admin.html';
+                        return;
+                    }
+                    document.getElementById('userInfo').style.display = '';
+                } else {
+                    // 清除缓存并重定向
+                    localStorage.clear();
+                    sessionStorage.clear();
+                    window.location.href = '/login.html';
+                }
+            } catch (error) {
+                localStorage.clear();
+                sessionStorage.clear();
                 window.location.href = '/login.html';
             }
         }
@@ -656,6 +674,10 @@
             };
             // 登出
             document.getElementById('logoutBtn').onclick = async function() {
+                // 清除所有本地存储和缓存
+                localStorage.clear();
+                sessionStorage.clear();
+                
                 await fetch('/user/logout', {method:'POST'});
                 window.location.href = '/login.html';
             };
@@ -690,30 +712,119 @@
                     document.getElementById('userMsg').innerHTML = `<div class='alert alert-${data.status==='success'?'success':'danger'}'>${data.message}</div>`;
                 });
             };
-            // 充值积分
+            // 充值积分（固定金额选择）
             document.getElementById('rechargeBtn').onclick = function() {
-                const amountStr = prompt('请输入要充值的积分数量（正整数）');
-                if (!amountStr) return;
-                const amount = parseInt(amountStr, 10);
-                if (isNaN(amount) || amount <= 0) {
-                    alert('请输入大于0的整数');
-                    return;
-                }
-                fetch('/user/recharge', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({amount})
-                }).then(r=>r.json()).then(data=>{
-                    const cls = data.status === 'success' ? 'success' : 'danger';
-                    document.getElementById('userMsg').innerHTML =
-                        `<div class='alert alert-${cls}'>${data.message}</div>`;
-                    if (data.status === 'success') {
-                        // 更新积分显示
-                        document.getElementById('profilePoints').textContent = data.points;
-                    }
+                // 显示充值选择弹窗
+                const rechargeOptions = [50, 100, 200, 1000];
+                let html = `
+                    <div class="card">
+                        <div class="card-header">充值积分</div>
+                        <div class="card-body">
+                            <div class="mb-3">
+                                <label class="form-label">选择充值金额</label>
+                                <div class="btn-group d-flex flex-wrap" role="group">
+                                    ${rechargeOptions.map(amt => `<button type="button" class="btn btn-outline-primary recharge-amount-btn m-1" data-amount="${amt}">${amt}积分</button>`).join('')}
+                                </div>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">选择支付方式</label>
+                                <div class="btn-group d-flex" role="group">
+                                    <button type="button" class="btn btn-outline-success payment-method-btn active m-1" data-method="alipay">支付宝</button>
+                                    <button type="button" class="btn btn-outline-success payment-method-btn m-1" data-method="wechat">微信</button>
+                                </div>
+                            </div>
+                            <button type="button" class="btn btn-primary w-100" id="submitRechargeBtn">提交充值申请</button>
+                            <small class="text-muted d-block mt-2">提交后请等待管理员审核</small>
+                        </div>
+                    </div>
+                `;
+                document.getElementById('userMsg').innerHTML = html;
+                
+                // 金额选择
+                let selectedAmount = null;
+                document.querySelectorAll('.recharge-amount-btn').forEach(btn => {
+                    btn.onclick = function() {
+                        document.querySelectorAll('.recharge-amount-btn').forEach(b => b.classList.remove('active'));
+                        this.classList.add('active');
+                        selectedAmount = parseInt(this.dataset.amount);
+                    };
                 });
+                
+                // 支付方式选择
+                let selectedMethod = 'alipay';
+                document.querySelectorAll('.payment-method-btn').forEach(btn => {
+                    btn.onclick = function() {
+                        document.querySelectorAll('.payment-method-btn').forEach(b => b.classList.remove('active'));
+                        this.classList.add('active');
+                        selectedMethod = this.dataset.method;
+                    };
+                });
+                
+                // 提交
+                document.getElementById('submitRechargeBtn').onclick = function() {
+                    if (!selectedAmount) {
+                        alert('请选择充值金额');
+                        return;
+                    }
+                    fetch('/user/recharge', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({amount: selectedAmount, payment_method: selectedMethod})
+                    }).then(r=>r.json()).then(data=>{
+                        const cls = data.status === 'success' ? 'success' : 'danger';
+                        document.getElementById('userMsg').innerHTML = `<div class='alert alert-${cls}'>${data.message}</div>`;
+                        if (data.status === 'success') loadProfile();
+                    });
+                };
+            };
+            // 查看充值记录
+            document.getElementById('rechargeHistoryBtn').onclick = async function() {
+                try {
+                    const res = await fetch('/user/my_recharge_requests');
+                    const data = await res.json();
+                    if (data.status === 'success') {
+                        const requests = data.data;
+                        if (requests.length === 0) {
+                            alert('暂无充值记录');
+                            return;
+                        }
+                        const statusMap = {
+                            'pending': '待审核',
+                            'approved': '已批准',
+                            'rejected': '已拒绝'
+                        };
+                        const paymentMap = {
+                            'alipay': '支付宝',
+                            'wechat': '微信'
+                        };
+                        let html = '<div style="max-height:400px;overflow-y:auto;"><table class="table table-sm"><thead><tr><th>积分</th><th>支付方式</th><th>状态</th><th>申请时间</th></tr></thead><tbody>';
+                        requests.forEach(r => {
+                            const statusClass = r.status === 'approved' ? 'text-success' : (r.status === 'rejected' ? 'text-danger' : 'text-warning');
+                            html += `<tr><td>${r.amount}</td><td>${paymentMap[r.payment_method] || r.payment_method}</td><td class="${statusClass}">${statusMap[r.status]}</td><td>${new Date(r.created_at).toLocaleString('zh-CN')}</td></tr>`;
+                        });
+                        html += '</tbody></table></div>';
+                        document.getElementById('userMsg').innerHTML = `<div class="card"><div class="card-header">充值记录</div><div class="card-body">${html}</div></div>`;
+                    }
+                } catch (e) {
+                    alert('获取充值记录失败');
+                }
             };
         });
+        
+        // 积分实时刷新（每10秒刷新一次）
+        setInterval(async () => {
+            try {
+                const res = await fetch('/user/profile');
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.status === 'success' && data.role === 'user') {
+                        document.getElementById('profilePoints').textContent = data.data.points;
+                    }
+                }
+            } catch (e) {
+                console.error('刷新积分失败:', e);
+            }
+        }, 10000);
     </script>
 </body>
 </html> 

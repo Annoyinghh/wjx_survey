@@ -3,24 +3,17 @@ import hashlib
 import datetime
 import os
 from flask import Blueprint, request, session, jsonify, g
-from config import DB_TYPE, MYSQL_CONFIG, POSTGRESQL_CONFIG
+from config import DB_TYPE, MYSQL_CONFIG
 
 try:
-    import psycopg2
+    import pymysql
 except ImportError:
-    psycopg2 = None
+    pymysql = None
 
 user_bp = Blueprint('user', __name__)
 
-# 根据环境选择数据库配置
-# 云端环境：必须使用 PostgreSQL
-if os.getenv('FLASK_ENV') == 'production' or os.getenv('DATABASE_URL'):
-    DB_CONFIG = POSTGRESQL_CONFIG
-    DB_TYPE = 'postgresql'
-elif DB_TYPE == 'postgresql':
-    DB_CONFIG = POSTGRESQL_CONFIG
-else:
-    DB_CONFIG = MYSQL_CONFIG
+# 数据库配置 - MySQL
+DB_CONFIG = MYSQL_CONFIG
 
 EMAIL_REGEX = r'^[A-Za-z0-9._%+-]+@(qq\.com|163\.com|126\.com|gmail\.com|outlook\.com|hotmail\.com|sina\.com|foxmail\.com)'
 
@@ -28,15 +21,9 @@ EMAIL_REGEX = r'^[A-Za-z0-9._%+-]+@(qq\.com|163\.com|126\.com|gmail\.com|outlook
 def get_db():
     db = getattr(g, '_database', None)
     if db is None:
-        if psycopg2 is None:
-            raise ImportError("psycopg2 is not installed. Install it with: pip install psycopg2-binary")
-        db = g._database = psycopg2.connect(
-            host=DB_CONFIG['host'],
-            port=DB_CONFIG['port'],
-            user=DB_CONFIG['user'],
-            password=DB_CONFIG['password'],
-            database=DB_CONFIG['database']
-        )
+        if pymysql is None:
+            raise ImportError("pymysql is not installed. Install it with: pip install pymysql")
+        db = g._database = pymysql.connect(**DB_CONFIG)
     return db
 
 @user_bp.teardown_app_request
@@ -54,21 +41,15 @@ def valid_email(email):
 
 # --- 初始化数据库 ---
 def init_db():
-    if psycopg2 is None:
-        raise ImportError("psycopg2 is not installed. Install it with: pip install psycopg2-binary")
-    conn = psycopg2.connect(
-        host=DB_CONFIG['host'],
-        port=DB_CONFIG['port'],
-        user=DB_CONFIG['user'],
-        password=DB_CONFIG['password'],
-        database=DB_CONFIG['database']
-    )
+    if pymysql is None:
+        raise ImportError("pymysql is not installed. Install it with: pip install pymysql")
+    conn = pymysql.connect(**DB_CONFIG)
     
     c = conn.cursor()
     
     # 创建用户表
     c.execute('''CREATE TABLE IF NOT EXISTS users (
-        id SERIAL PRIMARY KEY,
+        id INT AUTO_INCREMENT PRIMARY KEY,
         email VARCHAR(128) UNIQUE NOT NULL,
         username VARCHAR(64) NOT NULL,
         password VARCHAR(128) NOT NULL,
@@ -79,11 +60,44 @@ def init_db():
     
     # 创建管理员表
     c.execute('''CREATE TABLE IF NOT EXISTS admins (
-        id SERIAL PRIMARY KEY,
+        id INT AUTO_INCREMENT PRIMARY KEY,
         username VARCHAR(64) UNIQUE NOT NULL,
         password VARCHAR(128) NOT NULL,
         phone VARCHAR(20),
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
+    
+    # 创建充值申请表
+    c.execute('''CREATE TABLE IF NOT EXISTS recharge_requests (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        amount INT NOT NULL,
+        remark VARCHAR(255) DEFAULT '',
+        status ENUM('pending', 'approved', 'rejected') DEFAULT 'pending',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        processed_at TIMESTAMP NULL,
+        FOREIGN KEY (user_id) REFERENCES users(id)
+    )''')
+    
+    # 创建积分日志表（如果不存在）
+    c.execute('''CREATE TABLE IF NOT EXISTS points_log (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        points_change INT NOT NULL,
+        reason VARCHAR(255),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id)
+    )''')
+    
+    # 创建问卷记录表（如果不存在）
+    c.execute('''CREATE TABLE IF NOT EXISTS survey_records (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        survey_url VARCHAR(512),
+        status VARCHAR(32),
+        points_deducted INT DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id)
     )''')
     
     # 创建默认管理员（如果不存在）
@@ -91,6 +105,7 @@ def init_db():
     if not c.fetchone():
         default_password = hash_password('xzx123456')
         c.execute('INSERT INTO admins (username, password) VALUES (%s, %s)', ('Bear', default_password))
+        print("✓ 默认管理员账号已创建: 用户名=Bear, 密码=xzx123456")
     
     conn.commit()
     conn.close()
@@ -129,33 +144,41 @@ def login():
     data = request.json
     email = data.get('email', '').strip()
     password = data.get('password', '')
-    login_type = data.get('type', 'user')  # 'user' 或 'admin'
     
     if not (email and password):
         return jsonify({'status': 'error', 'message': '邮箱/用户名和密码必填'}), 400
     
+    # 清除旧的session数据
+    session.clear()
+    
     db = get_db()
     
-    if login_type == 'admin':
-        # 管理员登录
-        with db.cursor() as cur:
-            cur.execute('SELECT * FROM admins WHERE username=%s', (email,))
-            admin = cur.fetchone()
-            if not admin or admin[2] != hash_password(password):
+    # 先检查是否是管理员账号（英文用户名）
+    with db.cursor() as cur:
+        cur.execute('SELECT * FROM admins WHERE username=%s', (email,))
+        admin = cur.fetchone()
+        if admin:
+            # 是管理员账号
+            if admin[2] != hash_password(password):
                 return jsonify({'status': 'error', 'message': '用户名或密码错误'}), 400
             session['admin_id'] = admin[0]
             session['role'] = 'admin'
             return jsonify({'status': 'success', 'message': '登录成功', 'username': admin[1], 'role': 'admin'})
-    else:
-        # 普通用户登录
-        with db.cursor() as cur:
-            cur.execute('SELECT * FROM users WHERE email=%s', (email,))
-            user = cur.fetchone()
-            if not user or user[3] != hash_password(password):
+    
+    # 再检查是否是普通用户（邮箱）
+    with db.cursor() as cur:
+        cur.execute('SELECT * FROM users WHERE email=%s', (email,))
+        user = cur.fetchone()
+        if user:
+            # 是普通用户账号
+            if user[3] != hash_password(password):
                 return jsonify({'status': 'error', 'message': '邮箱或密码错误'}), 400
             session['user_id'] = user[0]
             session['role'] = 'user'
             return jsonify({'status': 'success', 'message': '登录成功', 'username': user[2], 'role': 'user', 'points': user[4]})
+    
+    # 都不匹配
+    return jsonify({'status': 'error', 'message': '用户名或密码错误'}), 400
 
 # --- 登出 ---
 @user_bp.route('/logout', methods=['POST'])
@@ -227,50 +250,177 @@ def signin():
     db.commit()
     return jsonify({'status': 'success', 'message': '签到成功，积分+5', 'points': new_points})
 
-# --- 积分充值 ---
+# --- 积分充值申请 ---
+# 固定充值金额选项
+RECHARGE_OPTIONS = [50, 100, 200, 1000]
+PAYMENT_METHODS = ['alipay', 'wechat']
+
 @user_bp.route('/recharge', methods=['POST'])
 def recharge():
     """
-    积分充值接口：
-    - 普通用户：给自己充值
-    - 管理员：可以在 body 中传入 user_id 给指定用户充值
+    积分充值申请接口：
+    - 普通用户：提交充值申请，等待管理员审核
+    - 固定金额: 50, 100, 200, 1000
+    - 支付方式: alipay, wechat
     """
     user_id = session.get('user_id')
-    role = session.get('role')
     if not user_id:
         return jsonify({'status': 'error', 'message': '未登录'}), 401
 
     data = request.json or {}
     amount = data.get('amount')
-    target_user_id = data.get('user_id') if role == 'admin' else user_id
+    payment_method = data.get('payment_method', 'alipay')
 
-    # 基本校验
+    # 校验金额
     try:
         amount = int(amount)
     except (TypeError, ValueError):
-        return jsonify({'status': 'error', 'message': '充值积分必须是整数'}), 400
+        return jsonify({'status': 'error', 'message': '请选择充值金额'}), 400
 
-    if amount <= 0:
-        return jsonify({'status': 'error', 'message': '充值积分必须大于0'}), 400
-    if amount > 100000:
-        return jsonify({'status': 'error', 'message': '单次充值积分过大，请联系管理员'}), 400
+    if amount not in RECHARGE_OPTIONS:
+        return jsonify({'status': 'error', 'message': f'请选择有效的充值金额: {RECHARGE_OPTIONS}'}), 400
+
+    # 校验支付方式
+    if payment_method not in PAYMENT_METHODS:
+        return jsonify({'status': 'error', 'message': '请选择有效的支付方式'}), 400
 
     db = get_db()
     with db.cursor() as cur:
-        cur.execute('UPDATE users SET points = points + %s WHERE id = %s', (amount, target_user_id))
-        if cur.rowcount == 0:
-            return jsonify({'status': 'error', 'message': '用户不存在，充值失败'}), 404
-
-        cur.execute('SELECT points FROM users WHERE id = %s', (target_user_id,))
-        row = cur.fetchone()
-        new_points = row[0] if row else 0
-
+        # 获取用户信息
+        cur.execute('SELECT email, username FROM users WHERE id=%s', (user_id,))
+        user = cur.fetchone()
+        if not user:
+            return jsonify({'status': 'error', 'message': '用户不存在'}), 404
+        
+        # 创建充值申请记录
+        cur.execute('''
+            INSERT INTO recharge_requests (user_id, amount, payment_method, status)
+            VALUES (%s, %s, %s, 'pending')
+        ''', (user_id, amount, payment_method))
+    
     db.commit()
+    
+    payment_name = '支付宝' if payment_method == 'alipay' else '微信'
     return jsonify({
         'status': 'success',
-        'message': f'充值成功，本次增加 {amount} 积分',
-        'points': new_points
+        'message': f'充值申请已提交！金额: {amount}积分，支付方式: {payment_name}，请等待管理员审核'
     })
+
+# --- 获取充值申请列表（管理员） ---
+@user_bp.route('/recharge_requests', methods=['GET'])
+def get_recharge_requests():
+    """获取所有充值申请（管理员用）"""
+    if not session.get('admin_id'):
+        return jsonify({'status': 'error', 'message': '无权限'}), 403
+    
+    status_filter = request.args.get('status', 'pending')
+    
+    db = get_db()
+    with db.cursor() as cur:
+        if status_filter == 'all':
+            cur.execute('''
+                SELECT r.id, r.user_id, u.email, u.username, r.amount, r.payment_method, r.status, r.created_at, r.processed_at
+                FROM recharge_requests r
+                JOIN users u ON r.user_id = u.id
+                ORDER BY r.created_at DESC
+                LIMIT 100
+            ''')
+        else:
+            cur.execute('''
+                SELECT r.id, r.user_id, u.email, u.username, r.amount, r.payment_method, r.status, r.created_at, r.processed_at
+                FROM recharge_requests r
+                JOIN users u ON r.user_id = u.id
+                WHERE r.status = %s
+                ORDER BY r.created_at DESC
+                LIMIT 100
+            ''', (status_filter,))
+        
+        requests_list = cur.fetchall()
+        keys = ['id', 'user_id', 'email', 'username', 'amount', 'payment_method', 'status', 'created_at', 'processed_at']
+        return jsonify({
+            'status': 'success',
+            'data': [dict(zip(keys, r)) for r in requests_list]
+        })
+
+# --- 处理充值申请（管理员） ---
+@user_bp.route('/recharge_requests/<int:request_id>', methods=['POST'])
+def process_recharge_request(request_id):
+    """处理充值申请（管理员审核）"""
+    if not session.get('admin_id'):
+        return jsonify({'status': 'error', 'message': '无权限'}), 403
+    
+    data = request.json or {}
+    action = data.get('action')  # 'approve' 或 'reject'
+    
+    if action not in ['approve', 'reject']:
+        return jsonify({'status': 'error', 'message': '无效操作'}), 400
+    
+    db = get_db()
+    with db.cursor() as cur:
+        # 获取申请信息
+        cur.execute('SELECT user_id, amount, status FROM recharge_requests WHERE id=%s', (request_id,))
+        req = cur.fetchone()
+        
+        if not req:
+            return jsonify({'status': 'error', 'message': '申请不存在'}), 404
+        
+        if req[2] != 'pending':
+            return jsonify({'status': 'error', 'message': '该申请已处理'}), 400
+        
+        user_id, amount, _ = req
+        
+        if action == 'approve':
+            # 批准：增加用户积分
+            cur.execute('UPDATE users SET points = points + %s WHERE id = %s', (amount, user_id))
+            cur.execute('''
+                UPDATE recharge_requests 
+                SET status = 'approved', processed_at = NOW()
+                WHERE id = %s
+            ''', (request_id,))
+            
+            # 记录积分日志
+            cur.execute('''
+                INSERT INTO points_log (user_id, points_change, reason)
+                VALUES (%s, %s, %s)
+            ''', (user_id, amount, f'充值申请审核通过 (申请ID: {request_id})'))
+            
+            message = f'已批准充值申请，用户积分 +{amount}'
+        else:
+            # 拒绝
+            cur.execute('''
+                UPDATE recharge_requests 
+                SET status = 'rejected', processed_at = NOW()
+                WHERE id = %s
+            ''', (request_id,))
+            message = '已拒绝充值申请'
+    
+    db.commit()
+    return jsonify({'status': 'success', 'message': message})
+
+# --- 获取用户自己的充值申请记录 ---
+@user_bp.route('/my_recharge_requests', methods=['GET'])
+def get_my_recharge_requests():
+    """获取当前用户的充值申请记录"""
+    user_id = session.get('user_id')
+    if not user_id:
+        return jsonify({'status': 'error', 'message': '未登录'}), 401
+    
+    db = get_db()
+    with db.cursor() as cur:
+        cur.execute('''
+            SELECT id, amount, payment_method, status, created_at, processed_at
+            FROM recharge_requests
+            WHERE user_id = %s
+            ORDER BY created_at DESC
+            LIMIT 50
+        ''', (user_id,))
+        
+        requests_list = cur.fetchall()
+        keys = ['id', 'amount', 'payment_method', 'status', 'created_at', 'processed_at']
+        return jsonify({
+            'status': 'success',
+            'data': [dict(zip(keys, r)) for r in requests_list]
+        })
 
 # --- 管理员接口示例（可扩展） ---
 @user_bp.route('/users', methods=['GET'])

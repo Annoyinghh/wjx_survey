@@ -4,6 +4,10 @@ psycopg2-binary==2.9.10
 PyMySQL==1.1.0
 gunicorn==21.2.0
 python-dotenv==1.0.0
-selenium==4.21.0
-webdriver-manager==4.0.2
 requests==2.31.0
+beautifulsoup4==4.12.3
+lxml==5.1.0
+
+# 以下依赖仅在本地 Selenium 模式下需要（云端可删除）
+# selenium==4.21.0
+# webdriver-manager==4.0.2

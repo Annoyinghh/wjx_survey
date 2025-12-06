@@ -1,8 +1,8 @@
 from flask import Flask, render_template, request, jsonify, session
-from survey_filler import SurveyFiller
-from survey_parser import SurveyParser
 from user import user_bp, init_db
-from config import DB_TYPE, MYSQL_CONFIG, POSTGRESQL_CONFIG
+from config import MYSQL_CONFIG
+from survey_filler_http import SurveyFillerHTTP as SurveyFiller
+from survey_parser_http import SurveyParserHTTP as SurveyParser
 import json
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -12,16 +12,19 @@ import os
 from dotenv import load_dotenv
 
 load_dotenv()
+print("使用 HTTP 模式（云端兼容）")
+
+# 初始化数据库（创建表和默认管理员）
+try:
+    init_db()
+    print("✓ 数据库初始化完成")
+except Exception as e:
+    print(f"⚠ 数据库初始化出错: {e}")
 
 try:
-    import psycopg2
+    import pymysql
 except ImportError:
-    psycopg2 = None
-
-# try:
-#     import pymysql
-# except ImportError:
-#     pymysql = None
+    pymysql = None
 
 # 全局变量用于跟踪进度
 progress_data = {
@@ -38,54 +41,15 @@ app = Flask(__name__)
 app.secret_key = 'wjx_survey_secret_key'
 app.register_blueprint(user_bp, url_prefix='/user')
 
-# 数据库配置 - 当前仅使用 PostgreSQL
-DB_CONFIG = POSTGRESQL_CONFIG
+# 数据库配置 - MySQL
+DB_CONFIG = MYSQL_CONFIG
 
-# # MySQL 备用代码（本地开发）
-# if os.getenv('DATABASE_URL') or os.getenv('FLASK_ENV') == 'production':
-#     DB_CONFIG = POSTGRESQL_CONFIG
-#     _USE_POSTGRESQL = True
-# else:
-#     DB_CONFIG = MYSQL_CONFIG if DB_TYPE == 'mysql' else POSTGRESQL_CONFIG
-#     _USE_POSTGRESQL = (DB_TYPE == 'postgresql')
-
-# 仅在本地开发环境初始化数据库
-if os.getenv('FLASK_ENV') != 'production':
-    try:
-        init_db()
-    except Exception as e:
-        print(f"数据库初始化警告: {e}")
 
 def get_db_connection():
     """获取数据库连接"""
-    # 当前仅使用 PostgreSQL
-    if psycopg2 is None:
-        raise ImportError("psycopg2 is not installed. Install it with: pip install psycopg2-binary")
-    return psycopg2.connect(
-        host=DB_CONFIG['host'],
-        port=DB_CONFIG['port'],
-        user=DB_CONFIG['user'],
-        password=DB_CONFIG['password'],
-        database=DB_CONFIG['database']
-    )
-    
-    # # MySQL 备用代码（本地开发）
-    # use_postgresql = os.getenv('DATABASE_URL') or os.getenv('FLASK_ENV') == 'production' or _USE_POSTGRESQL
-    # 
-    # if use_postgresql:
-    #     if psycopg2 is None:
-    #         raise ImportError("psycopg2 is not installed. Install it with: pip install psycopg2-binary")
-    #     return psycopg2.connect(
-    #         host=DB_CONFIG['host'],
-    #         port=DB_CONFIG['port'],
-    #         user=DB_CONFIG['user'],
-    #         password=DB_CONFIG['password'],
-    #         database=DB_CONFIG['database']
-    #     )
-    # else:
-    #     if pymysql is None:
-    #         raise ImportError("pymysql is not installed. Install it with: pip install pymysql")
-    #     return pymysql.connect(**DB_CONFIG)
+    if pymysql is None:
+        raise ImportError("pymysql is not installed. Install it with: pip install pymysql")
+    return pymysql.connect(**DB_CONFIG)
 
 def hash_password(pw):
     return hashlib.sha256(pw.encode('utf-8')).hexdigest()
@@ -100,38 +64,20 @@ def index():
 
 @app.route('/parse', methods=['POST'])
 def parse_survey():
-    try:
-        url = request.form.get('url')
-        if not url:
-            return jsonify({
-                'status': 'error',
-                'message': '请提供问卷URL'
-            }), 400
-        
-        print(f"[PARSE] 开始解析问卷: {url}")
-        parser = SurveyParser()
-        survey_data = parser.parse_survey(url)
-        
-        if survey_data:
-            print(f"[PARSE] 解析成功")
-            return jsonify({
-                'status': 'success',
-                'data': survey_data
-            })
-        else:
-            print(f"[PARSE] 解析失败: 返回 None")
-            return jsonify({
-                'status': 'error',
-                'message': '解析问卷失败'
-            }), 500
-    except Exception as e:
-        print(f"[PARSE] 异常: {str(e)}")
-        import traceback
-        traceback.print_exc()
+    url = request.form.get('url')
+    parser = SurveyParser()
+    survey_data = parser.parse_survey(url)
+    
+    if survey_data:
+        return jsonify({
+            'status': 'success',
+            'data': survey_data
+        })
+    else:
         return jsonify({
             'status': 'error',
-            'message': f'解析问卷异常: {str(e)}'
-        }), 500
+            'message': '解析问卷失败'
+        })
 
 @app.route('/submit', methods=['POST'])
 def submit():
@@ -397,7 +343,7 @@ def get_points_log():
 def admin_get_users():
     """获取所有用户列表"""
     if not session.get('admin_id'):
-        return jsonify({'status': 'error', 'message': '无权限'}), 403
+        return jsonify({'status': 'error', 'message': '无权限，请使用管理员账号登录'}), 403
     
     conn = get_db_connection()
     try:

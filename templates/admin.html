@@ -98,6 +98,7 @@
             <small style="color: #95a5a6;">问卷星系统</small>
         </div>
         <a href="#" class="nav-link active" onclick="showSection('users')">用户管理</a>
+        <a href="#" class="nav-link" onclick="showSection('recharge')">充值审核</a>
         <a href="#" class="nav-link" onclick="showSection('stats')">统计信息</a>
         <a href="#" class="nav-link" onclick="logout()">登出</a>
     </div>
@@ -136,6 +137,41 @@
                     </thead>
                     <tbody id="usersTable">
                         <tr><td colspan="8" class="text-center text-muted">加载中...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- 充值审核部分 -->
+        <div id="rechargeSection" style="display: none;">
+            <div style="margin-bottom: 20px;">
+                <select id="rechargeStatusFilter" class="form-select" style="width: 200px; display: inline-block;" onchange="loadRechargeRequests()">
+                    <option value="pending">待审核</option>
+                    <option value="approved">已批准</option>
+                    <option value="rejected">已拒绝</option>
+                    <option value="all">全部</option>
+                </select>
+                <button class="btn btn-outline-primary ms-2" onclick="loadRechargeRequests()">刷新</button>
+                <span id="pendingCount" class="badge bg-warning ms-2" style="font-size: 1rem;"></span>
+            </div>
+
+            <div class="table-container">
+                <table class="table table-hover mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>ID</th>
+                            <th>用户</th>
+                            <th>邮箱</th>
+                            <th>申请积分</th>
+                            <th>备注</th>
+                            <th>状态</th>
+                            <th>申请时间</th>
+                            <th>处理时间</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="rechargeTable">
+                        <tr><td colspan="9" class="text-center text-muted">加载中...</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -276,6 +312,9 @@
             try {
                 const res = await fetch('/user/profile');
                 if (res.status === 401) {
+                    // 清除缓存并重定向
+                    localStorage.clear();
+                    sessionStorage.clear();
                     window.location.href = '/login.html';
                     return;
                 }
@@ -283,10 +322,15 @@
                 if (data.status === 'success' && data.role === 'admin') {
                     document.getElementById('adminName').textContent = `欢迎，${data.data.username}`;
                 } else {
+                    // 无权限，清除缓存并重定向
+                    localStorage.clear();
+                    sessionStorage.clear();
                     alert('无权限访问');
                     window.location.href = '/login.html';
                 }
             } catch (error) {
+                localStorage.clear();
+                sessionStorage.clear();
                 window.location.href = '/login.html';
             }
         }
@@ -484,15 +528,127 @@
         // 显示/隐藏部分
         function showSection(section) {
             document.getElementById('usersSection').style.display = section === 'users' ? 'block' : 'none';
+            document.getElementById('rechargeSection').style.display = section === 'recharge' ? 'block' : 'none';
             document.getElementById('statsSection').style.display = section === 'stats' ? 'block' : 'none';
             
             // 更新导航栏
             document.querySelectorAll('.sidebar a').forEach(a => a.classList.remove('active'));
             event.target.classList.add('active');
+            
+            // 加载充值申请
+            if (section === 'recharge') {
+                loadRechargeRequests();
+            }
+        }
+
+        // 加载充值申请列表
+        async function loadRechargeRequests() {
+            const status = document.getElementById('rechargeStatusFilter').value;
+            try {
+                const res = await fetch(`/user/recharge_requests?status=${status}`);
+                const data = await res.json();
+                if (data.status === 'success') {
+                    renderRechargeRequests(data.data);
+                    
+                    // 更新待审核数量
+                    if (status === 'pending') {
+                        document.getElementById('pendingCount').textContent = `待审核: ${data.data.length}`;
+                    } else {
+                        // 单独获取待审核数量
+                        const pendingRes = await fetch('/user/recharge_requests?status=pending');
+                        const pendingData = await pendingRes.json();
+                        if (pendingData.status === 'success') {
+                            document.getElementById('pendingCount').textContent = `待审核: ${pendingData.data.length}`;
+                        }
+                    }
+                }
+            } catch (error) {
+                console.error('加载充值申请失败:', error);
+            }
+        }
+
+        // 渲染充值申请表格
+        function renderRechargeRequests(requests) {
+            const tbody = document.getElementById('rechargeTable');
+            if (requests.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="9" class="text-center text-muted">暂无申请</td></tr>';
+                return;
+            }
+
+            const statusMap = {
+                'pending': '<span class="badge bg-warning">待审核</span>',
+                'approved': '<span class="badge bg-success">已批准</span>',
+                'rejected': '<span class="badge bg-danger">已拒绝</span>'
+            };
+            
+            const paymentMap = {
+                'alipay': '<span class="badge bg-primary">支付宝</span>',
+                'wechat': '<span class="badge bg-success">微信</span>'
+            };
+
+            tbody.innerHTML = requests.map(req => `
+                <tr>
+                    <td>${req.id}</td>
+                    <td>${req.username}</td>
+                    <td>${req.email}</td>
+                    <td><strong>${req.amount}</strong></td>
+                    <td>${paymentMap[req.payment_method] || req.payment_method || '-'}</td>
+                    <td>${statusMap[req.status] || req.status}</td>
+                    <td>${formatDateTime(req.created_at)}</td>
+                    <td>${req.processed_at ? formatDateTime(req.processed_at) : '-'}</td>
+                    <td>
+                        ${req.status === 'pending' ? `
+                            <button class="btn btn-sm btn-success" onclick="processRecharge(${req.id}, 'approve')">批准</button>
+                            <button class="btn btn-sm btn-danger" onclick="processRecharge(${req.id}, 'reject')">拒绝</button>
+                        ` : '-'}
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        // 处理充值申请
+        async function processRecharge(requestId, action) {
+            const actionText = action === 'approve' ? '批准' : '拒绝';
+            if (!confirm(`确定要${actionText}该充值申请吗？`)) return;
+
+            try {
+                const res = await fetch(`/user/recharge_requests/${requestId}`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({action})
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    alert(data.message);
+                    loadRechargeRequests();
+                    loadUsers(); // 刷新用户列表以更新积分
+                } else {
+                    alert('操作失败: ' + data.message);
+                }
+            } catch (error) {
+                alert('操作失败: ' + error.message);
+            }
+        }
+
+        // 格式化日期时间
+        function formatDateTime(dateStr) {
+            if (!dateStr) return '-';
+            const date = new Date(dateStr);
+            return date.toLocaleString('zh-CN', {
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit'
+            });
         }
 
         // 登出
         async function logout() {
+            // 清除所有本地存储和缓存
+            localStorage.clear();
+            sessionStorage.clear();
+            
             await fetch('/user/logout', {method: 'POST'});
             window.location.href = '/login.html';
         }
