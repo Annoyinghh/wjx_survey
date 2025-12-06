@@ -100,20 +100,38 @@ def index():
 
 @app.route('/parse', methods=['POST'])
 def parse_survey():
-    url = request.form.get('url')
-    parser = SurveyParser()
-    survey_data = parser.parse_survey(url)
-    
-    if survey_data:
-        return jsonify({
-            'status': 'success',
-            'data': survey_data
-        })
-    else:
+    try:
+        url = request.form.get('url')
+        if not url:
+            return jsonify({
+                'status': 'error',
+                'message': '请提供问卷URL'
+            }), 400
+        
+        print(f"[PARSE] 开始解析问卷: {url}")
+        parser = SurveyParser()
+        survey_data = parser.parse_survey(url)
+        
+        if survey_data:
+            print(f"[PARSE] 解析成功")
+            return jsonify({
+                'status': 'success',
+                'data': survey_data
+            })
+        else:
+            print(f"[PARSE] 解析失败: 返回 None")
+            return jsonify({
+                'status': 'error',
+                'message': '解析问卷失败'
+            }), 500
+    except Exception as e:
+        print(f"[PARSE] 异常: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({
             'status': 'error',
-            'message': '解析问卷失败'
-        })
+            'message': f'解析问卷异常: {str(e)}'
+        }), 500
 
 @app.route('/submit', methods=['POST'])
 def submit():
