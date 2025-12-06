@@ -1,6 +1,6 @@
 from flask import Flask, render_template, request, jsonify, session
 from user import user_bp, init_db
-from config import MYSQL_CONFIG
+from config import DB_TYPE, DB_CONFIG, MYSQL_CONFIG
 from survey_filler_http import SurveyFillerHTTP as SurveyFiller
 from survey_parser_http import SurveyParserHTTP as SurveyParser
 import json
@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 print("使用 HTTP 模式（云端兼容）")
+print(f"数据库类型: {DB_TYPE}")
 
 # 初始化数据库（创建表和默认管理员）
 try:
@@ -25,6 +26,11 @@ try:
     import pymysql
 except ImportError:
     pymysql = None
+
+try:
+    import psycopg2
+except ImportError:
+    psycopg2 = None
 
 # 全局变量用于跟踪进度
 progress_data = {
@@ -47,9 +53,14 @@ DB_CONFIG = MYSQL_CONFIG
 
 def get_db_connection():
     """获取数据库连接"""
-    if pymysql is None:
-        raise ImportError("pymysql is not installed. Install it with: pip install pymysql")
-    return pymysql.connect(**DB_CONFIG)
+    if DB_TYPE == 'postgresql':
+        if psycopg2 is None:
+            raise ImportError("psycopg2 is not installed. Install it with: pip install psycopg2-binary")
+        return psycopg2.connect(DB_CONFIG['database_url'])
+    else:  # MySQL
+        if pymysql is None:
+            raise ImportError("pymysql is not installed. Install it with: pip install pymysql")
+        return pymysql.connect(**DB_CONFIG)
 
 def hash_password(pw):
     return hashlib.sha256(pw.encode('utf-8')).hexdigest()

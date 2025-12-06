@@ -10,22 +10,34 @@ elif os.path.exists('.env.local'):
 # 获取运行环境
 ENV = os.getenv('FLASK_ENV', 'local')
 
-# 数据库配置 - MySQL
-DB_TYPE = 'mysql'
+# 检查是否有DATABASE_URL（云端PostgreSQL）
+DATABASE_URL = os.getenv('DATABASE_URL')
 
-MYSQL_CONFIG = {
-    'host': os.getenv('DB_HOST', 'localhost'),
-    'port': int(os.getenv('DB_PORT', 3306)),
-    'user': os.getenv('DB_USER', 'root'),
-    'password': os.getenv('DB_PASSWORD', '123456'),
-    'database': os.getenv('DB_NAME', 'wjx_survey'),
-    'charset': 'utf8mb4',
-    'autocommit': True
-}
-
-DB_CONFIG = MYSQL_CONFIG
-
-print(f"[CONFIG] 使用 MySQL (本地开发)")
+if DATABASE_URL:
+    # 云端模式：使用PostgreSQL
+    DB_TYPE = 'postgresql'
+    print(f"[CONFIG] 使用 PostgreSQL (云端模式)")
+    
+    # PostgreSQL配置
+    POSTGRESQL_CONFIG = {
+        'database_url': DATABASE_URL
+    }
+    DB_CONFIG = POSTGRESQL_CONFIG
+else:
+    # 本地模式：使用MySQL
+    DB_TYPE = 'mysql'
+    print(f"[CONFIG] 使用 MySQL (本地开发)")
+    
+    MYSQL_CONFIG = {
+        'host': os.getenv('DB_HOST', 'localhost'),
+        'port': int(os.getenv('DB_PORT', 3306)),
+        'user': os.getenv('DB_USER', 'root'),
+        'password': os.getenv('DB_PASSWORD', '123456'),
+        'database': os.getenv('DB_NAME', 'wjx_survey'),
+        'charset': 'utf8mb4',
+        'autocommit': True
+    }
+    DB_CONFIG = MYSQL_CONFIG
 
 # Flask 配置
 SECRET_KEY = os.getenv('SECRET_KEY', 'wjx_survey_secret_key')

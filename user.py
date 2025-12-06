@@ -3,17 +3,20 @@ import hashlib
 import datetime
 import os
 from flask import Blueprint, request, session, jsonify, g
-from config import DB_TYPE, MYSQL_CONFIG
+from config import DB_TYPE, DB_CONFIG, MYSQL_CONFIG
 
 try:
     import pymysql
 except ImportError:
     pymysql = None
 
-user_bp = Blueprint('user', __name__)
+try:
+    import psycopg2
+    from psycopg2 import sql
+except ImportError:
+    psycopg2 = None
 
-# 数据库配置 - MySQL
-DB_CONFIG = MYSQL_CONFIG
+user_bp = Blueprint('user', __name__)
 
 EMAIL_REGEX = r'^[A-Za-z0-9._%+-]+@(qq\.com|163\.com|126\.com|gmail\.com|outlook\.com|hotmail\.com|sina\.com|foxmail\.com)'
 
@@ -21,9 +24,14 @@ EMAIL_REGEX = r'^[A-Za-z0-9._%+-]+@(qq\.com|163\.com|126\.com|gmail\.com|outlook
 def get_db():
     db = getattr(g, '_database', None)
     if db is None:
-        if pymysql is None:
-            raise ImportError("pymysql is not installed. Install it with: pip install pymysql")
-        db = g._database = pymysql.connect(**DB_CONFIG)
+        if DB_TYPE == 'postgresql':
+            if psycopg2 is None:
+                raise ImportError("psycopg2 is not installed. Install it with: pip install psycopg2-binary")
+            db = g._database = psycopg2.connect(DB_CONFIG['database_url'])
+        else:  # MySQL
+            if pymysql is None:
+                raise ImportError("pymysql is not installed. Install it with: pip install pymysql")
+            db = g._database = pymysql.connect(**DB_CONFIG)
     return db
 
 @user_bp.teardown_app_request
