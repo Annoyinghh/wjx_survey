@@ -10,6 +10,17 @@ elif os.path.exists('.env.local'):
 # 获取运行环境
 ENV = os.getenv('FLASK_ENV', 'local')
 
+# 总是定义MySQL配置（本地开发用）
+MYSQL_CONFIG = {
+    'host': os.getenv('DB_HOST', 'localhost'),
+    'port': int(os.getenv('DB_PORT', 3306)),
+    'user': os.getenv('DB_USER', 'root'),
+    'password': os.getenv('DB_PASSWORD', '123456'),
+    'database': os.getenv('DB_NAME', 'wjx_survey'),
+    'charset': 'utf8mb4',
+    'autocommit': True
+}
+
 # 检查是否有DATABASE_URL（云端PostgreSQL）
 DATABASE_URL = os.getenv('DATABASE_URL')
 
@@ -27,16 +38,6 @@ else:
     # 本地模式：使用MySQL
     DB_TYPE = 'mysql'
     print(f"[CONFIG] 使用 MySQL (本地开发)")
-    
-    MYSQL_CONFIG = {
-        'host': os.getenv('DB_HOST', 'localhost'),
-        'port': int(os.getenv('DB_PORT', 3306)),
-        'user': os.getenv('DB_USER', 'root'),
-        'password': os.getenv('DB_PASSWORD', '123456'),
-        'database': os.getenv('DB_NAME', 'wjx_survey'),
-        'charset': 'utf8mb4',
-        'autocommit': True
-    }
     DB_CONFIG = MYSQL_CONFIG
 
 # Flask 配置
