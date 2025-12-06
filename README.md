@@ -220,15 +220,67 @@ A: 完全免费！Render 提供免费的 Web Service 和 PostgreSQL。
 ### Q: 如何修改管理员密码？
 A: 登录管理员账号后在个人资料页面修改。
 
-### Q: 为什么问卷星上没有显示答卷？
-A: 当前使用 HTTP 请求方式提交，问卷星可能需要 JavaScript 处理。建议改用 Selenium 来模拟真实浏览器行为。
+## 问卷星提交技术要点
 
-### Q: 如何改进提交成功率？
-A: 
-1. 使用 Selenium 替代 HTTP 请求
-2. 添加更多的请求头和参数
-3. 实现重试机制
-4. 添加验证码识别功能
+### 关键发现（2025-12-07）
+
+经过大量调试，成功实现了纯 HTTP 请求提交问卷星，以下是关键技术点：
+
+#### 1. 答案分隔符
+```
+✗ 错误: 1$1;2$1;3$测试  (使用分号)
+✓ 正确: 1$1}2$1}3$测试  (使用右花括号)
+```
+
+#### 2. jqnonce 参数
+- 必须从页面提取 UUID 格式：`8f9f41d4-34a7-45e4-8b98-066e132f5ec5`
+- 使用正则：`.{8}-.{4}-.{4}-.{4}-.{12}`
+
+#### 3. jqsign 签名算法
+```python
+def get_jqsign(ktimes, jqnonce):
+    result = []
+    b = ktimes % 10 if ktimes % 10 != 0 else 1
+    for char in jqnonce:
+        result.append(chr(ord(char) ^ b))
+    return ''.join(result)
+```
+
+#### 4. starttime 格式
+- 使用页面提取的日期格式：`2025/12/7 1:09:39`
+- 正则：`\d+?/\d+?/\d+?\s\d+?:\d{2}:\d{2}`
+
+#### 5. 完整 URL 参数
+```python
+url_params = {
+    'shortid': 'mR4RDSc',
+    'starttime': '2025/12/7 1:09:39',
+    'submittype': '1',
+    'ktimes': '195',
+    'hlv': '1',
+    'rn': '245426330.54539084',  # rndnum
+    'nw': '1',
+    'jwt': '4',
+    'jpm': '83',
+    't': '1765040979349',  # 当前时间戳毫秒
+    'jqnonce': '8f9f41d4-34a7-45e4-8b98-066e132f5ec5',
+    'jqsign': '=c<c14a1...',  # XOR 计算结果
+}
+```
+
+#### 6. 提交接口
+- URL: `https://www.wjx.cn/joinnew/processjq.ashx`
+- 方法: POST
+- URL 参数: 上述所有参数
+- POST 数据: `{'submitdata': '1$1}2$1}3$测试...'}`
+
+#### 7. 成功响应
+```
+10〒/wjx/join/complete.aspx?activityid=xxx&joinid=xxx...
+```
+- 包含 `wjx/join` 表示成功
+- 错误码 `9〒1〒` 表示第1题答案格式错误
+- 错误码 `22` 表示问卷地址错误
 
 ## 许可证
 

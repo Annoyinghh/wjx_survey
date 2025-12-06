@@ -1,0 +1,13 @@
+Test 1:
+  nonce: 404889b1
+  ktimes: 117
+  t = 7
+  jqsign bytes: [51, 55, 51, 63, 63, 62, 101, 54]
+  jqsign URL encoded: 373%3F%3F%3Ee6
+
+Test 2:
+  nonce: 84ce9c0e
+  ktimes: 102
+  t = 2
+  jqsign bytes: [58, 54, 97, 103, 59, 97, 50, 103]
+  jqsign URL encoded: %3A6ag%3Ba2g

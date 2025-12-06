@@ -10,7 +10,7 @@ import json
 import random
 import time
 import hashlib
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.parse import urlparse, parse_qs, urlencode
 import os
 
@@ -334,21 +334,31 @@ class SurveyFillerHTTP:
 
     def _generate_text_answer(self, question_text):
         """生成填空题答案"""
+        answer = None
+        
         if self.use_ai and self.ai_generator:
             try:
-                return self.ai_generator.generate_answer(question_text)
+                answer = self.ai_generator.generate_answer(question_text)
             except:
                 pass
         
-        # 默认答案
-        default_answers = [
-            "无",
-            "暂无",
-            "没有特别的想法",
-            "一切正常",
-            "满意",
-        ]
-        return random.choice(default_answers)
+        if not answer:
+            # 默认答案
+            default_answers = [
+                "无",
+                "暂无",
+                "没有特别的想法",
+                "一切正常",
+                "满意",
+            ]
+            answer = random.choice(default_answers)
+        
+        # 清理答案：移除换行符和其他特殊字符
+        answer = answer.replace('\n', ' ').replace('\r', ' ')
+        answer = answer.replace(';', '，').replace('$', '').replace('}', '')
+        answer = answer.strip()
+        
+        return answer
 
     def _generate_sort_answer(self, options):
         """生成排序题答案"""
@@ -438,8 +448,8 @@ class SurveyFillerHTTP:
             js_params = self._extract_js_params(html)
             
             # 构建答案字符串
-            # 问卷星格式: 题号$答案;题号$答案;...
-            # 用分号分隔，不是用 }
+            # 问卷星格式: 题号$答案}题号$答案}...
+            # 用 } 分隔（参考成功代码）
             answer_parts = []
             for q_index, answer in sorted(answers.items()):
                 # 确保答案是字符串格式
@@ -448,38 +458,51 @@ class SurveyFillerHTTP:
                 q_num = q_index.replace('div', '') if isinstance(q_index, str) else str(q_index)
                 answer_parts.append(f"{q_num}${answer_str}")
             
-            submitdata = ';'.join(answer_parts)
+            submitdata = '}'.join(answer_parts)
             
             print(f"答案格式检查: 第一个答案={answer_parts[0] if answer_parts else 'N/A'}")
             
-            # 填写时间（秒）
-            ktimes = random.randint(60, 180)
-            current_time = int(time.time() * 1000)
-            starttime = current_time - ktimes * 1000
+            # ktimes: 鼠标移动次数，随机生成
+            ktimes = random.randint(57, 143) + int(random.random() * 286)
             
-            # 生成jqsign（如果没有从页面提取到）
-            jqsign = js_params.get('jqsign', '')
-            if not jqsign:
-                # 尝试生成一个有效的jqsign
-                jqsign = self._generate_jqsign(submitdata, str(ktimes))
+            # starttime: 使用页面提取的日期格式（如 2025/12/7 1:09:39）
+            starttime = js_params.get('starttime', '')
+            if not starttime:
+                # 如果没有提取到，生成当前时间格式
+                from datetime import datetime
+                starttime = datetime.now().strftime('%Y/%m/%d %H:%M:%S')
             
-            # 问卷星需要的核心参数
+            print(f"ktimes: {ktimes}, starttime: {starttime}")
+            
+            # 从页面提取 jqnonce（UUID格式）
+            jqnonce = js_params.get('jqnonce', '')
+            if not jqnonce:
+                jqnonce = self._generate_jqnonce()
+            
+            # 生成 jqsign (使用 dataenc 算法: XOR jqnonce with ktimes%10)
+            jqsign = self._generate_jqsign(submitdata, ktimes, jqnonce)
+            print(f"jqnonce: {jqnonce}, ktimes%10: {ktimes%10}, jqsign: {jqsign}")
+            
+            # 问卷星需要的核心参数（参考成功代码）
             submit_data = {
                 'submitdata': submitdata,
                 'ktimes': str(ktimes),
-                'starttime': str(starttime),
-                'source': js_params.get('source', 'directphone'),
-                'hlv': js_params.get('hlv', '1'),
-                'jqnonce': js_params.get('jqnonce', self._generate_jqnonce()),
+                'starttime': starttime,
+                'jqnonce': jqnonce,
                 'jqsign': jqsign,
-                'rn': js_params.get('rn', ''),
-                'timestamp': str(int(time.time() * 1000)),
+                'rndnum': js_params.get('rndnum', ''),
+                'submittype': '1',
+                'hlv': '1',
+                'nw': '1',
+                'jwt': '4',
+                'jpm': '83',
+                't': str(int(time.time() * 1000)),
             }
             
             # 移除空值
             submit_data = {k: v for k, v in submit_data.items() if v}
             
-            print(f"提交数据: {json.dumps(submit_data, ensure_ascii=False, indent=2)}")
+            print(f"提交数据: {json.dumps(submit_data, ensure_ascii=False)}")
             print(f"答案数据: {submitdata[:200]}...")
             
             return submit_data, js_params
@@ -495,68 +518,59 @@ class SurveyFillerHTTP:
         """从 JavaScript 中提取参数"""
         params = {}
         
-        # 首先尝试提取问卷的数字ID（最重要）
-        # 问卷星页面中通常有 activityId 或类似的数字ID
-        activity_patterns = [
-            r'activityId\s*[=:]\s*["\']?(\d{5,})',  # activityId: 123456
-            r'"activityId"\s*:\s*(\d{5,})',  # "activityId": 123456
-            r'activity\s*[=:]\s*["\']?(\d{5,})',  # activity: 123456
-            r'/jq/(\d{5,})\.aspx',  # /jq/123456.aspx
-            r'curID\s*[=:]\s*["\']?(\d{5,})',  # curID: 123456
-            r'"curID"\s*:\s*["\']?(\d{5,})',  # "curID": "123456"
-        ]
+        # 提取 rndnum (格式: 245426330.54539084)
+        rndnum_match = re.search(r'\d{9,10}\.\d{8}', html)
+        if rndnum_match:
+            params['rndnum'] = rndnum_match.group()
+            print(f"提取到 rndnum: {params['rndnum']}")
         
-        for pattern in activity_patterns:
-            match = re.search(pattern, html)
-            if match:
-                params['activityId'] = match.group(1)
-                print(f"提取到数字问卷ID (activityId): {params['activityId']}")
-                break
+        # 提取 jqnonce (UUID格式: 8f9f41d4-34a7-45e4-8b98-066e132f5ec5)
+        jqnonce_match = re.search(r'.{8}-.{4}-.{4}-.{4}-.{12}', html)
+        if jqnonce_match:
+            params['jqnonce'] = jqnonce_match.group()
+            print(f"提取到 jqnonce: {params['jqnonce']}")
         
-        # 其他参数
-        patterns = [
-            (r'ktimes\s*[=:]\s*["\']?(\d+)', 'ktimes'),
-            (r'starttime\s*[=:]\s*["\']?(\d+)', 'starttime'),
-            (r'jqnonce\s*[=:]\s*["\']?([a-zA-Z0-9]+)', 'jqnonce'),
-            (r'rn\s*[=:]\s*["\']?([^"\';\s,\)]+)', 'rn'),
-            (r'hlv\s*[=:]\s*["\']?(\d+)', 'hlv'),
-            (r'jqsign\s*[=:]\s*["\']?([a-zA-Z0-9]+)', 'jqsign'),
-            (r'source\s*[=:]\s*["\']?([^"\';\s,\)]+)', 'source'),
-            (r'"dataList"\s*:\s*(\[[^\]]*\])', 'dataList'),
-        ]
-        
-        for pattern, key in patterns:
-            match = re.search(pattern, html)
-            if match:
-                params[key] = match.group(1)
-                if key != 'dataList':
-                    print(f"提取到参数 {key}: {params[key][:50] if len(params[key]) > 50 else params[key]}")
+        # 提取 starttime (格式: 2025/12/7 1:09:39)
+        starttime_match = re.search(r'\d+?/\d+?/\d+?\s\d+?:\d{2}:\d{2}', html)
+        if starttime_match:
+            params['starttime'] = starttime_match.group()
+            print(f"提取到 starttime: {params['starttime']}")
         
         return params
 
     def _generate_jqnonce(self):
-        """生成 jqnonce 参数"""
-        # 简单的随机字符串
-        chars = 'abcdefghijklmnopqrstuvwxyz0123456789'
-        return ''.join(random.choice(chars) for _ in range(16))
+        """生成 jqnonce 参数 - 8位字符串
+        
+        注意：只使用 '0' 和 '1'，因为它们对所有 t 值(1-9)XOR 后都是字母数字
+        其他字符在某些 t 值下会产生特殊字符（如 ':', ';', '<', '>', '`' 等）
+        """
+        chars = '01'  # 只使用 0 和 1
+        return ''.join(random.choice(chars) for _ in range(8))
     
-    def _generate_jqsign(self, submitdata, ktimes):
-        """生成 jqsign 参数（问卷星的签名）"""
-        try:
-            # 问卷星的jqsign可能是多种算法的组合
-            # 尝试不同的组合方式
-            
-            # 方法1: submitdata + ktimes 的 MD5
-            sign_str = f"{submitdata}{ktimes}"
-            sign_hash = hashlib.md5(sign_str.encode()).hexdigest()
-            
-            # 方法2: 也可以尝试只用 submitdata
-            # sign_hash = hashlib.md5(submitdata.encode()).hexdigest()
-            
-            # 返回完整的哈希值
-            return sign_hash
-        except:
+    def _dataenc(self, jqnonce, ktimes):
+        """问卷星的 dataenc 签名算法
+        
+        算法:
+        1. t = ktimes % 10, 如果 t == 0 则 t = 1
+        2. 对 jqnonce 的每个字符进行 XOR t 运算
+        3. 返回结果字符串
+        """
+        t = int(ktimes) % 10
+        if t == 0:
+            t = 1
+        
+        result = []
+        for char in jqnonce:
+            n = ord(char) ^ t
+            result.append(chr(n))
+        
+        return ''.join(result)
+    
+    def _generate_jqsign(self, submitdata, ktimes, jqnonce=''):
+        """生成 jqsign 参数"""
+        if not jqnonce:
             return ''
+        return self._dataenc(jqnonce, ktimes)
 
     def _submit_survey(self, url, submit_data, js_params=None):
         """提交问卷"""
@@ -581,69 +595,69 @@ class SurveyFillerHTTP:
                 return False
             
             # 问卷星提交接口
-            submit_url = f"{base_url}/joinnew/processjq.ashx"
+            submit_url = "https://www.wjx.cn/joinnew/processjq.ashx"
             
-            # 获取数字问卷ID（从js_params或submit_data中）
+            # 构建 URL 参数（参考成功代码的完整参数）
             js_params = js_params or {}
-            activity_id = js_params.get('activityId') or submit_data.get('activityId')
+            url_params = {
+                'shortid': short_id,
+                'starttime': submit_data.get('starttime', ''),
+                'submittype': submit_data.get('submittype', '1'),
+                'ktimes': submit_data.get('ktimes', ''),
+                'hlv': submit_data.get('hlv', '1'),
+                'rn': submit_data.get('rndnum', ''),
+                'nw': submit_data.get('nw', '1'),
+                'jwt': submit_data.get('jwt', '4'),
+                'jpm': submit_data.get('jpm', '83'),
+                't': submit_data.get('t', str(int(time.time() * 1000))),
+                'jqnonce': submit_data.get('jqnonce', ''),
+                'jqsign': submit_data.get('jqsign', ''),
+            }
             
-            # 添加问卷 ID 到提交数据
-            submit_data['shortid'] = short_id
-            # curID 应该是数字ID，如果有的话
-            if activity_id:
-                submit_data['curID'] = activity_id
-                print(f"使用数字问卷ID: {activity_id}")
-            else:
-                submit_data['curID'] = short_id
-                print(f"警告: 未找到数字问卷ID，使用短ID: {short_id}")
-            
-            submit_data['t'] = str(random.random())  # 随机数
-            submit_data['submittype'] = '1'  # 提交类型
-            
-            # 移除不需要的参数
-            submit_data.pop('v', None)
-            submit_data.pop('lang', None)
-            submit_data.pop('activityId', None)  # 已经用于curID了
+            # 移除空值
+            url_params = {k: v for k, v in url_params.items() if v}
             
             print(f"提交 URL: {submit_url}")
-            print(f"短ID: {short_id}, curID: {submit_data['curID']}")
-            print(f"提交数据键: {list(submit_data.keys())}")
+            print(f"URL参数: {url_params}")
+            print(f"jqsign验证: jqnonce={submit_data.get('jqnonce')}, ktimes={submit_data.get('ktimes')}, jqsign={submit_data.get('jqsign')}")
             
-            # 调试：打印完整的提交数据
-            print(f"完整提交数据:")
-            for key, value in submit_data.items():
-                if len(str(value)) > 100:
-                    print(f"  {key}: {str(value)[:100]}...")
-                else:
-                    print(f"  {key}: {value}")
+            # POST 数据只需要 submitdata
+            post_data = {
+                'submitdata': submit_data.get('submitdata', '')
+            }
+            
+            print(f"POST数据: submitdata={post_data['submitdata'][:100]}...")
             
             # 设置提交请求头
             submit_headers = {
+                'Host': 'www.wjx.cn',
+                'Origin': 'https://www.wjx.cn',
+                'Referer': f'https://www.wjx.cn/vm/{short_id}.aspx',
                 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
                 'X-Requested-With': 'XMLHttpRequest',
-                'Origin': base_url,
-                'Referer': clean_url,
-                'Accept': 'text/plain, */*; q=0.01',
+                'Accept': '*/*',
                 'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'Cache-Control': 'no-cache',
-                'Pragma': 'no-cache',
+                'Sec-Ch-Ua': '"Google Chrome";v="120", "Chromium";v="120", "Not/A)Brand";v="24"',
+                'Sec-Ch-Ua-Mobile': '?0',
+                'Sec-Ch-Ua-Platform': '"Windows"',
+                'Sec-Fetch-Dest': 'empty',
+                'Sec-Fetch-Mode': 'cors',
+                'Sec-Fetch-Site': 'same-origin',
             }
             
             # 模拟延迟
-            time.sleep(random.uniform(1, 3))
+            time.sleep(random.uniform(0.5, 1.5))
             
             # 发送提交请求
-            print(f"正在发送POST请求到: {submit_url}")
-            print(f"提交数据大小: {len(urlencode(submit_data))} 字节")
+            print(f"正在发送POST请求...")
             
             response = self.session.post(
                 submit_url,
-                data=submit_data,
+                params=url_params,  # URL 参数
+                data=post_data,     # POST 数据
                 headers=submit_headers,
                 timeout=30,
                 allow_redirects=True,
-                verify=False  # 忽略SSL证书验证
             )
             
             print(f"提交响应状态: {response.status_code}")
@@ -682,57 +696,24 @@ class SurveyFillerHTTP:
             if response.status_code == 200:
                 response_text = response.text.strip()
                 
-                # 根据提供的示例，成功的标志是响应中不包含"22"
-                # 问卷星返回格式通常是数字或 JSON
-                # 10 = 成功, 1 = 需要验证, 2 = 重复提交等
+                # 根据参考代码的成功判断：
+                # 成功: 'wjx/join' in response.text
+                # 失败: response.text == '22' 或 '问卷地址错误' in response
                 
-                # 首先检查是否包含错误代码
-                if '22' in response_text:
-                    print(f"✗ 提交失败: 返回错误代码 22")
+                if 'wjx/join' in response_text:
+                    print("✓ 问卷提交成功！")
+                    return True
+                elif response_text == '22' or '问卷地址错误' in response_text:
+                    print(f"✗ 提交失败: 错误代码 22 或问卷地址错误")
                     return False
                 elif response_text == '10':
                     print("✓ 问卷提交成功 (返回码: 10)")
                     return True
-                elif response_text in ['1', '2', '3', '4', '5', '6', '7', '8', '9']:
-                    error_codes = {
-                        '1': '需要验证码',
-                        '2': '重复提交',
-                        '3': '问卷已关闭',
-                        '4': '参数错误',
-                        '5': 'IP限制',
-                        '6': '设备限制',
-                        '7': '答案不完整',
-                        '8': '时间限制',
-                        '9': '其他错误',
-                    }
-                    print(f"✗ 提交失败: {error_codes.get(response_text, '未知错误')} (返回码: {response_text})")
-                    return False
-                elif '成功' in response_text or 'success' in response_text.lower() or '感谢' in response_text:
+                elif '成功' in response_text or '感谢' in response_text:
                     print("✓ 问卷提交成功")
                     return True
-                elif '验证' in response_text or 'verify' in response_text.lower():
-                    print("✗ 需要验证，提交失败")
-                    return False
-                elif '<html' in response_text.lower():
-                    # 返回了HTML页面，这通常表示提交失败
-                    # 根据示例，成功的提交应该返回数字代码，而不是HTML页面
-                    print(f"✗ 提交失败: 返回HTML页面而不是数字代码")
-                    return False
                 else:
-                    # 尝试解析 JSON
-                    try:
-                        result = json.loads(response_text)
-                        if result.get('code') == 10 or result.get('success'):
-                            print("✓ 问卷提交成功 (JSON)")
-                            return True
-                        else:
-                            print(f"✗ JSON响应: {result}")
-                            return False
-                    except:
-                        pass
-                    
-                    # 根据示例，如果响应不是数字代码，就是失败
-                    print(f"✗ 提交失败: 无效的响应格式 {response_text[:100]}")
+                    print(f"疑似失败，响应: {response_text[:200]}")
                     return False
             else:
                 print(f"✗ 提交失败: HTTP {response.status_code}")
