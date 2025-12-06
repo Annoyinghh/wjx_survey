@@ -1,0 +1,39 @@
+services:
+  - type: web
+    name: wjx-survey
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11
+      - key: FLASK_ENV
+        value: production
+      - key: DB_HOST
+        fromDatabase:
+          name: wjx-survey-db
+          property: host
+      - key: DB_PORT
+        fromDatabase:
+          name: wjx-survey-db
+          property: port
+      - key: DB_USER
+        fromDatabase:
+          name: wjx-survey-db
+          property: user
+      - key: DB_PASSWORD
+        fromDatabase:
+          name: wjx-survey-db
+          property: password
+      - key: DB_NAME
+        fromDatabase:
+          name: wjx-survey-db
+          property: database
+
+  - type: pserv
+    name: wjx-survey-db
+    env: mysql
+    plan: free
+    ipAllowList: []
+    mysqlVersion: 8
