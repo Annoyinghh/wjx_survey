@@ -88,10 +88,10 @@ class SurveyFillerHTTP:
             print(f"生成了 {len(answers)} 个答案")
             
             # 4. 构建提交数据
-            submit_data = self._build_submit_data(soup, html, url, answers)
+            submit_data, js_params = self._build_submit_data(soup, html, url, answers)
             
             # 5. 提交问卷
-            result = self._submit_survey(url, submit_data)
+            result = self._submit_survey(url, submit_data, js_params)
             
             return result
             
@@ -482,37 +482,54 @@ class SurveyFillerHTTP:
             print(f"提交数据: {json.dumps(submit_data, ensure_ascii=False, indent=2)}")
             print(f"答案数据: {submitdata[:200]}...")
             
+            return submit_data, js_params
+            
         except Exception as e:
             print(f"构建提交数据时出错: {e}")
             import traceback
             traceback.print_exc()
         
-        return submit_data
+        return submit_data, {}
 
     def _extract_js_params(self, html):
         """从 JavaScript 中提取参数"""
         params = {}
         
+        # 首先尝试提取问卷的数字ID（最重要）
+        # 问卷星页面中通常有 activityId 或类似的数字ID
+        activity_patterns = [
+            r'activityId\s*[=:]\s*["\']?(\d{5,})',  # activityId: 123456
+            r'"activityId"\s*:\s*(\d{5,})',  # "activityId": 123456
+            r'activity\s*[=:]\s*["\']?(\d{5,})',  # activity: 123456
+            r'/jq/(\d{5,})\.aspx',  # /jq/123456.aspx
+            r'curID\s*[=:]\s*["\']?(\d{5,})',  # curID: 123456
+            r'"curID"\s*:\s*["\']?(\d{5,})',  # "curID": "123456"
+        ]
+        
+        for pattern in activity_patterns:
+            match = re.search(pattern, html)
+            if match:
+                params['activityId'] = match.group(1)
+                print(f"提取到数字问卷ID (activityId): {params['activityId']}")
+                break
+        
+        # 其他参数
         patterns = [
             (r'ktimes\s*[=:]\s*["\']?(\d+)', 'ktimes'),
             (r'starttime\s*[=:]\s*["\']?(\d+)', 'starttime'),
             (r'jqnonce\s*[=:]\s*["\']?([a-zA-Z0-9]+)', 'jqnonce'),
             (r'rn\s*[=:]\s*["\']?([^"\';\s,\)]+)', 'rn'),
             (r'hlv\s*[=:]\s*["\']?(\d+)', 'hlv'),
-            (r'jqsign\s*[=:]\s*["\']?([a-zA-Z0-9]+)', 'jqsign'),  # 只匹配字母数字
+            (r'jqsign\s*[=:]\s*["\']?([a-zA-Z0-9]+)', 'jqsign'),
             (r'source\s*[=:]\s*["\']?([^"\';\s,\)]+)', 'source'),
             (r'"dataList"\s*:\s*(\[[^\]]*\])', 'dataList'),
-            (r'activityId\s*[=:]\s*["\']?(\d+)', 'activityId'),
-            (r'surveyId\s*[=:]\s*["\']?(\d+)', 'surveyId'),
-            (r'qid\s*[=:]\s*["\']?(\d+)', 'qid'),
-            (r'id\s*[=:]\s*["\']?(\d+)', 'id'),
         ]
         
         for pattern, key in patterns:
             match = re.search(pattern, html)
             if match:
                 params[key] = match.group(1)
-                if key != 'dataList':  # dataList太长，不打印
+                if key != 'dataList':
                     print(f"提取到参数 {key}: {params[key][:50] if len(params[key]) > 50 else params[key]}")
         
         return params
@@ -541,7 +558,7 @@ class SurveyFillerHTTP:
         except:
             return ''
 
-    def _submit_survey(self, url, submit_data):
+    def _submit_survey(self, url, submit_data, js_params=None):
         """提交问卷"""
         try:
             # 清理 URL（移除 # 及其后面的内容）
@@ -551,35 +568,45 @@ class SurveyFillerHTTP:
             parsed_url = urlparse(clean_url)
             base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
             
-            # 从 URL 提取问卷 ID
-            # 格式: https://www.wjx.cn/vm/xxxxx.aspx 或 https://v.wjx.cn/vm/xxxxx.aspx
+            # 从 URL 提取短ID
             path = parsed_url.path
             match = re.search(r'/vm/([a-zA-Z0-9]+)\.aspx', path)
             if not match:
                 match = re.search(r'/([a-zA-Z0-9]+)\.aspx', path)
             
             if match:
-                survey_id = match.group(1)
+                short_id = match.group(1)
             else:
                 print(f"无法从 URL 提取问卷 ID: {clean_url}")
                 return False
             
-            # 问卷星提交接口格式: https://www.wjx.cn/joinnew/processjq.ashx
-            # 或者: https://v.wjx.cn/joinnew/processjq.ashx
+            # 问卷星提交接口
             submit_url = f"{base_url}/joinnew/processjq.ashx"
             
+            # 获取数字问卷ID（从js_params或submit_data中）
+            js_params = js_params or {}
+            activity_id = js_params.get('activityId') or submit_data.get('activityId')
+            
             # 添加问卷 ID 到提交数据
-            submit_data['shortid'] = survey_id
-            submit_data['curID'] = survey_id  # 问卷ID
-            submit_data['t'] = str(int(time.time() * 1000))
+            submit_data['shortid'] = short_id
+            # curID 应该是数字ID，如果有的话
+            if activity_id:
+                submit_data['curID'] = activity_id
+                print(f"使用数字问卷ID: {activity_id}")
+            else:
+                submit_data['curID'] = short_id
+                print(f"警告: 未找到数字问卷ID，使用短ID: {short_id}")
+            
+            submit_data['t'] = str(random.random())  # 随机数
             submit_data['submittype'] = '1'  # 提交类型
             
-            # 添加其他可能需要的参数
-            submit_data['v'] = '1'  # 版本
-            submit_data['lang'] = 'zh-CN'  # 语言
+            # 移除不需要的参数
+            submit_data.pop('v', None)
+            submit_data.pop('lang', None)
+            submit_data.pop('activityId', None)  # 已经用于curID了
             
             print(f"提交 URL: {submit_url}")
-            print(f"问卷 ID: {survey_id}")
+            print(f"短ID: {short_id}, curID: {submit_data['curID']}")
             print(f"提交数据键: {list(submit_data.keys())}")
             
             # 调试：打印完整的提交数据
