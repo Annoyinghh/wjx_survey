@@ -18,7 +18,11 @@ except ImportError:
 user_bp = Blueprint('user', __name__)
 
 # 根据环境选择数据库配置
-if DB_TYPE == 'postgresql':
+# 云端环境：必须使用 PostgreSQL
+if os.getenv('FLASK_ENV') == 'production' or os.getenv('DATABASE_URL'):
+    DB_CONFIG = POSTGRESQL_CONFIG
+    DB_TYPE = 'postgresql'
+elif DB_TYPE == 'postgresql':
     DB_CONFIG = POSTGRESQL_CONFIG
 else:
     DB_CONFIG = MYSQL_CONFIG

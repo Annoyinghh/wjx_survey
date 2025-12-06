@@ -38,8 +38,13 @@ app = Flask(__name__)
 app.secret_key = 'wjx_survey_secret_key'
 app.register_blueprint(user_bp, url_prefix='/user')
 
-# 数据库配置
-DB_CONFIG = MYSQL_CONFIG if DB_TYPE == 'mysql' else POSTGRESQL_CONFIG
+# 数据库配置 - 云端环境强制使用 PostgreSQL
+if os.getenv('DATABASE_URL') or os.getenv('FLASK_ENV') == 'production':
+    DB_CONFIG = POSTGRESQL_CONFIG
+    _USE_POSTGRESQL = True
+else:
+    DB_CONFIG = MYSQL_CONFIG if DB_TYPE == 'mysql' else POSTGRESQL_CONFIG
+    _USE_POSTGRESQL = (DB_TYPE == 'postgresql')
 
 # 仅在本地开发环境初始化数据库
 if os.getenv('FLASK_ENV') != 'production':
@@ -50,7 +55,10 @@ if os.getenv('FLASK_ENV') != 'production':
 
 def get_db_connection():
     """获取数据库连接"""
-    if DB_TYPE == 'postgresql':
+    # 云端环境强制使用 PostgreSQL
+    use_postgresql = os.getenv('DATABASE_URL') or os.getenv('FLASK_ENV') == 'production' or _USE_POSTGRESQL
+    
+    if use_postgresql:
         if psycopg2 is None:
             raise ImportError("psycopg2 is not installed. Install it with: pip install psycopg2-binary")
         return psycopg2.connect(
