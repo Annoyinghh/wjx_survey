@@ -10,11 +10,6 @@ try:
 except ImportError:
     psycopg2 = None
 
-try:
-    import pymysql
-except ImportError:
-    pymysql = None
-
 user_bp = Blueprint('user', __name__)
 
 # 根据环境选择数据库配置
@@ -33,33 +28,15 @@ EMAIL_REGEX = r'^[A-Za-z0-9._%+-]+@(qq\.com|163\.com|126\.com|gmail\.com|outlook
 def get_db():
     db = getattr(g, '_database', None)
     if db is None:
-        # 检查是否在云端环境
-        is_production = os.getenv('FLASK_ENV') == 'production' or os.getenv('DATABASE_URL')
-        
-        if is_production or DB_TYPE == 'postgresql':
-            # 云端或 PostgreSQL 环境
-            if psycopg2 is None:
-                raise ImportError("psycopg2 is not installed. Install it with: pip install psycopg2-binary")
-            try:
-                db = g._database = psycopg2.connect(
-                    host=DB_CONFIG['host'],
-                    port=DB_CONFIG['port'],
-                    user=DB_CONFIG['user'],
-                    password=DB_CONFIG['password'],
-                    database=DB_CONFIG['database']
-                )
-            except Exception as e:
-                print(f"[ERROR] PostgreSQL 连接失败: {e}")
-                raise
-        else:
-            # 本地 MySQL 环境
-            if pymysql is None:
-                raise ImportError("pymysql is not installed. Install it with: pip install pymysql")
-            try:
-                db = g._database = pymysql.connect(**DB_CONFIG)
-            except Exception as e:
-                print(f"[ERROR] MySQL 连接失败: {e}")
-                raise
+        if psycopg2 is None:
+            raise ImportError("psycopg2 is not installed. Install it with: pip install psycopg2-binary")
+        db = g._database = psycopg2.connect(
+            host=DB_CONFIG['host'],
+            port=DB_CONFIG['port'],
+            user=DB_CONFIG['user'],
+            password=DB_CONFIG['password'],
+            database=DB_CONFIG['database']
+        )
     return db
 
 @user_bp.teardown_app_request
@@ -77,62 +54,37 @@ def valid_email(email):
 
 # --- 初始化数据库 ---
 def init_db():
-    if DB_TYPE == 'postgresql':
-        if psycopg2 is None:
-            raise ImportError("psycopg2 is not installed. Install it with: pip install psycopg2-binary")
-        conn = psycopg2.connect(
-            host=DB_CONFIG['host'],
-            port=DB_CONFIG['port'],
-            user=DB_CONFIG['user'],
-            password=DB_CONFIG['password'],
-            database=DB_CONFIG['database']
-        )
-    else:
-        if pymysql is None:
-            raise ImportError("pymysql is not installed. Install it with: pip install pymysql")
-        conn = pymysql.connect(**DB_CONFIG)
+    if psycopg2 is None:
+        raise ImportError("psycopg2 is not installed. Install it with: pip install psycopg2-binary")
+    conn = psycopg2.connect(
+        host=DB_CONFIG['host'],
+        port=DB_CONFIG['port'],
+        user=DB_CONFIG['user'],
+        password=DB_CONFIG['password'],
+        database=DB_CONFIG['database']
+    )
     
     c = conn.cursor()
     
     # 创建用户表
-    if DB_TYPE == 'postgresql':
-        c.execute('''CREATE TABLE IF NOT EXISTS users (
-            id SERIAL PRIMARY KEY,
-            email VARCHAR(128) UNIQUE NOT NULL,
-            username VARCHAR(64) NOT NULL,
-            password VARCHAR(128) NOT NULL,
-            points INT DEFAULT 0,
-            last_signin DATE,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )''')
-        
-        # 创建管理员表
-        c.execute('''CREATE TABLE IF NOT EXISTS admins (
-            id SERIAL PRIMARY KEY,
-            username VARCHAR(64) UNIQUE NOT NULL,
-            password VARCHAR(128) NOT NULL,
-            phone VARCHAR(20),
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )''')
-    else:
-        c.execute('''CREATE TABLE IF NOT EXISTS users (
-            id INT PRIMARY KEY AUTO_INCREMENT,
-            email VARCHAR(128) UNIQUE NOT NULL,
-            username VARCHAR(64) NOT NULL,
-            password VARCHAR(128) NOT NULL,
-            points INT DEFAULT 0,
-            last_signin DATE,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )''')
-        
-        # 创建管理员表
-        c.execute('''CREATE TABLE IF NOT EXISTS admins (
-            id INT PRIMARY KEY AUTO_INCREMENT,
-            username VARCHAR(64) UNIQUE NOT NULL,
-            password VARCHAR(128) NOT NULL,
-            phone VARCHAR(20),
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        email VARCHAR(128) UNIQUE NOT NULL,
+        username VARCHAR(64) NOT NULL,
+        password VARCHAR(128) NOT NULL,
+        points INT DEFAULT 0,
+        last_signin DATE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
+    
+    # 创建管理员表
+    c.execute('''CREATE TABLE IF NOT EXISTS admins (
+        id SERIAL PRIMARY KEY,
+        username VARCHAR(64) UNIQUE NOT NULL,
+        password VARCHAR(128) NOT NULL,
+        phone VARCHAR(20),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
     
     # 创建默认管理员（如果不存在）
     c.execute('SELECT * FROM admins WHERE username=%s', ('Bear',))
