@@ -3,7 +3,7 @@ import hashlib
 import datetime
 import os
 from flask import Blueprint, request, session, jsonify, g
-from config import DB_TYPE, DB_CONFIG, MYSQL_CONFIG
+from config import DB_TYPE, DB_CONFIG
 
 try:
     import pymysql
@@ -49,64 +49,115 @@ def valid_email(email):
 
 # --- 初始化数据库 ---
 def init_db():
-    if pymysql is None:
-        raise ImportError("pymysql is not installed. Install it with: pip install pymysql")
-    conn = pymysql.connect(**DB_CONFIG)
+    if DB_TYPE == 'postgresql':
+        if psycopg2 is None:
+            raise ImportError("psycopg2 is not installed. Install it with: pip install psycopg2-binary")
+        conn = psycopg2.connect(DB_CONFIG['database_url'])
+        c = conn.cursor()
+    else:  # MySQL
+        if pymysql is None:
+            raise ImportError("pymysql is not installed. Install it with: pip install pymysql")
+        conn = pymysql.connect(**DB_CONFIG)
+        c = conn.cursor()
     
-    c = conn.cursor()
-    
-    # 创建用户表
-    c.execute('''CREATE TABLE IF NOT EXISTS users (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        email VARCHAR(128) UNIQUE NOT NULL,
-        username VARCHAR(64) NOT NULL,
-        password VARCHAR(128) NOT NULL,
-        points INT DEFAULT 0,
-        last_signin DATE,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )''')
-    
-    # 创建管理员表
-    c.execute('''CREATE TABLE IF NOT EXISTS admins (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        username VARCHAR(64) UNIQUE NOT NULL,
-        password VARCHAR(128) NOT NULL,
-        phone VARCHAR(20),
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )''')
-    
-    # 创建充值申请表
-    c.execute('''CREATE TABLE IF NOT EXISTS recharge_requests (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        user_id INT NOT NULL,
-        amount INT NOT NULL,
-        remark VARCHAR(255) DEFAULT '',
-        status ENUM('pending', 'approved', 'rejected') DEFAULT 'pending',
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        processed_at TIMESTAMP NULL,
-        FOREIGN KEY (user_id) REFERENCES users(id)
-    )''')
-    
-    # 创建积分日志表（如果不存在）
-    c.execute('''CREATE TABLE IF NOT EXISTS points_log (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        user_id INT NOT NULL,
-        points_change INT NOT NULL,
-        reason VARCHAR(255),
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (user_id) REFERENCES users(id)
-    )''')
-    
-    # 创建问卷记录表（如果不存在）
-    c.execute('''CREATE TABLE IF NOT EXISTS survey_records (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        user_id INT NOT NULL,
-        survey_url VARCHAR(512),
-        status VARCHAR(32),
-        points_deducted INT DEFAULT 0,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (user_id) REFERENCES users(id)
-    )''')
+    if DB_TYPE == 'postgresql':
+        # PostgreSQL 语法
+        c.execute('''CREATE TABLE IF NOT EXISTS users (
+            id SERIAL PRIMARY KEY,
+            email VARCHAR(128) UNIQUE NOT NULL,
+            username VARCHAR(64) NOT NULL,
+            password VARCHAR(128) NOT NULL,
+            points INT DEFAULT 0,
+            last_signin DATE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
+        
+        c.execute('''CREATE TABLE IF NOT EXISTS admins (
+            id SERIAL PRIMARY KEY,
+            username VARCHAR(64) UNIQUE NOT NULL,
+            password VARCHAR(128) NOT NULL,
+            phone VARCHAR(20),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
+        
+        c.execute('''CREATE TABLE IF NOT EXISTS recharge_requests (
+            id SERIAL PRIMARY KEY,
+            user_id INT NOT NULL,
+            amount INT NOT NULL,
+            remark VARCHAR(255) DEFAULT '',
+            status VARCHAR(20) DEFAULT 'pending',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            processed_at TIMESTAMP NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )''')
+        
+        c.execute('''CREATE TABLE IF NOT EXISTS points_log (
+            id SERIAL PRIMARY KEY,
+            user_id INT NOT NULL,
+            points_change INT NOT NULL,
+            reason VARCHAR(255),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )''')
+        
+        c.execute('''CREATE TABLE IF NOT EXISTS survey_records (
+            id SERIAL PRIMARY KEY,
+            user_id INT NOT NULL,
+            survey_url VARCHAR(512),
+            status VARCHAR(32),
+            points_deducted INT DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )''')
+    else:
+        # MySQL 语法
+        c.execute('''CREATE TABLE IF NOT EXISTS users (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            email VARCHAR(128) UNIQUE NOT NULL,
+            username VARCHAR(64) NOT NULL,
+            password VARCHAR(128) NOT NULL,
+            points INT DEFAULT 0,
+            last_signin DATE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
+        
+        c.execute('''CREATE TABLE IF NOT EXISTS admins (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            username VARCHAR(64) UNIQUE NOT NULL,
+            password VARCHAR(128) NOT NULL,
+            phone VARCHAR(20),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
+        
+        c.execute('''CREATE TABLE IF NOT EXISTS recharge_requests (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            user_id INT NOT NULL,
+            amount INT NOT NULL,
+            remark VARCHAR(255) DEFAULT '',
+            status ENUM('pending', 'approved', 'rejected') DEFAULT 'pending',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            processed_at TIMESTAMP NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )''')
+        
+        c.execute('''CREATE TABLE IF NOT EXISTS points_log (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            user_id INT NOT NULL,
+            points_change INT NOT NULL,
+            reason VARCHAR(255),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )''')
+        
+        c.execute('''CREATE TABLE IF NOT EXISTS survey_records (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            user_id INT NOT NULL,
+            survey_url VARCHAR(512),
+            status VARCHAR(32),
+            points_deducted INT DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )''')
     
     # 创建默认管理员（如果不存在）
     c.execute('SELECT * FROM admins WHERE username=%s', ('Bear',))

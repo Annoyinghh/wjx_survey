@@ -438,8 +438,8 @@ class SurveyFillerHTTP:
             js_params = self._extract_js_params(html)
             
             # 构建答案字符串
-            # 问卷星格式: 题号$答案}题号$答案}...
-            # 但需要确保题号是正确的格式（可能需要去掉"div"前缀）
+            # 问卷星格式: 题号$答案;题号$答案;...
+            # 用分号分隔，不是用 }
             answer_parts = []
             for q_index, answer in sorted(answers.items()):
                 # 确保答案是字符串格式
@@ -448,7 +448,7 @@ class SurveyFillerHTTP:
                 q_num = q_index.replace('div', '') if isinstance(q_index, str) else str(q_index)
                 answer_parts.append(f"{q_num}${answer_str}")
             
-            submitdata = '}'.join(answer_parts) + '}'
+            submitdata = ';'.join(answer_parts)
             
             print(f"答案格式检查: 第一个答案={answer_parts[0] if answer_parts else 'N/A'}")
             
@@ -499,17 +499,21 @@ class SurveyFillerHTTP:
             (r'jqnonce\s*[=:]\s*["\']?([a-zA-Z0-9]+)', 'jqnonce'),
             (r'rn\s*[=:]\s*["\']?([^"\';\s,\)]+)', 'rn'),
             (r'hlv\s*[=:]\s*["\']?(\d+)', 'hlv'),
-            (r'jqsign\s*[=:]\s*["\']?([^"\';\s,\)]+)', 'jqsign'),
+            (r'jqsign\s*[=:]\s*["\']?([a-zA-Z0-9]+)', 'jqsign'),  # 只匹配字母数字
             (r'source\s*[=:]\s*["\']?([^"\';\s,\)]+)', 'source'),
             (r'"dataList"\s*:\s*(\[[^\]]*\])', 'dataList'),
             (r'activityId\s*[=:]\s*["\']?(\d+)', 'activityId'),
+            (r'surveyId\s*[=:]\s*["\']?(\d+)', 'surveyId'),
+            (r'qid\s*[=:]\s*["\']?(\d+)', 'qid'),
+            (r'id\s*[=:]\s*["\']?(\d+)', 'id'),
         ]
         
         for pattern, key in patterns:
             match = re.search(pattern, html)
             if match:
                 params[key] = match.group(1)
-                print(f"提取到参数 {key}: {params[key][:50] if len(params[key]) > 50 else params[key]}")
+                if key != 'dataList':  # dataList太长，不打印
+                    print(f"提取到参数 {key}: {params[key][:50] if len(params[key]) > 50 else params[key]}")
         
         return params
 
@@ -522,11 +526,18 @@ class SurveyFillerHTTP:
     def _generate_jqsign(self, submitdata, ktimes):
         """生成 jqsign 参数（问卷星的签名）"""
         try:
-            # 问卷星的jqsign通常是submitdata和ktimes的某种组合的哈希
-            # 这是一个简化的实现，可能需要根据实际情况调整
+            # 问卷星的jqsign可能是多种算法的组合
+            # 尝试不同的组合方式
+            
+            # 方法1: submitdata + ktimes 的 MD5
             sign_str = f"{submitdata}{ktimes}"
             sign_hash = hashlib.md5(sign_str.encode()).hexdigest()
-            return sign_hash[:16]  # 取前16位
+            
+            # 方法2: 也可以尝试只用 submitdata
+            # sign_hash = hashlib.md5(submitdata.encode()).hexdigest()
+            
+            # 返回完整的哈希值
+            return sign_hash
         except:
             return ''
 
@@ -559,7 +570,9 @@ class SurveyFillerHTTP:
             
             # 添加问卷 ID 到提交数据
             submit_data['shortid'] = survey_id
+            submit_data['curID'] = survey_id  # 问卷ID
             submit_data['t'] = str(int(time.time() * 1000))
+            submit_data['submittype'] = '1'  # 提交类型
             
             # 添加其他可能需要的参数
             submit_data['v'] = '1'  # 版本
@@ -642,9 +655,15 @@ class SurveyFillerHTTP:
             if response.status_code == 200:
                 response_text = response.text.strip()
                 
+                # 根据提供的示例，成功的标志是响应中不包含"22"
                 # 问卷星返回格式通常是数字或 JSON
                 # 10 = 成功, 1 = 需要验证, 2 = 重复提交等
-                if response_text == '10':
+                
+                # 首先检查是否包含错误代码
+                if '22' in response_text:
+                    print(f"✗ 提交失败: 返回错误代码 22")
+                    return False
+                elif response_text == '10':
                     print("✓ 问卷提交成功 (返回码: 10)")
                     return True
                 elif response_text in ['1', '2', '3', '4', '5', '6', '7', '8', '9']:
@@ -668,41 +687,10 @@ class SurveyFillerHTTP:
                     print("✗ 需要验证，提交失败")
                     return False
                 elif '<html' in response_text.lower():
-                    # 返回了HTML页面，需要检查是否真的成功
-                    # 问卷星的系统提示页面可能包含错误信息
-                    if '系统提示' in response_text:
-                        # 尝试提取提示内容
-                        soup = BeautifulSoup(response_text, 'html.parser')
-                        
-                        # 尝试多个选择器查找提示文本
-                        msg = None
-                        for selector in ['.layui-layer-content', '.error-message', '#msg', 'p', '.content']:
-                            elem = soup.select_one(selector)
-                            if elem:
-                                msg = elem.get_text(strip=True)
-                                break
-                        
-                        # 如果还是找不到，提取所有文本
-                        if not msg:
-                            msg = soup.get_text(strip=True)
-                        
-                        print(f"系统提示: {msg[:150]}")
-                        
-                        # 检查是否包含成功关键词
-                        if '成功' in msg or '感谢' in msg or '提交成功' in msg or '谢谢' in msg:
-                            print("✓ 问卷提交成功")
-                            return True
-                        # 检查是否包含失败关键词
-                        elif '失败' in msg or '错误' in msg or '无效' in msg or '参数' in msg:
-                            print(f"✗ 提交失败: {msg[:100]}")
-                            return False
-                        else:
-                            # 无法判断，假设成功（因为返回了200状态码）
-                            print(f"⚠️  无法判断提交结果，假设成功")
-                            return True
-                    else:
-                        print(f"⚠️  返回HTML页面，但不是系统提示")
-                        return False
+                    # 返回了HTML页面，这通常表示提交失败
+                    # 根据示例，成功的提交应该返回数字代码，而不是HTML页面
+                    print(f"✗ 提交失败: 返回HTML页面而不是数字代码")
+                    return False
                 else:
                     # 尝试解析 JSON
                     try:
@@ -716,9 +704,9 @@ class SurveyFillerHTTP:
                     except:
                         pass
                     
-                    print(f"提交完成，响应: {response_text[:200]}")
-                    # 如果没有明确错误，假设成功
-                    return True
+                    # 根据示例，如果响应不是数字代码，就是失败
+                    print(f"✗ 提交失败: 无效的响应格式 {response_text[:100]}")
+                    return False
             else:
                 print(f"✗ 提交失败: HTTP {response.status_code}")
                 return False

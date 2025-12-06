@@ -1,6 +1,6 @@
 from flask import Flask, render_template, request, jsonify, session
 from user import user_bp, init_db
-from config import DB_TYPE, DB_CONFIG, MYSQL_CONFIG
+from config import DB_TYPE, DB_CONFIG
 from survey_filler_http import SurveyFillerHTTP as SurveyFiller
 from survey_parser_http import SurveyParserHTTP as SurveyParser
 import json
@@ -46,9 +46,6 @@ progress_lock = threading.Lock()
 app = Flask(__name__)
 app.secret_key = 'wjx_survey_secret_key'
 app.register_blueprint(user_bp, url_prefix='/user')
-
-# 数据库配置 - MySQL
-DB_CONFIG = MYSQL_CONFIG
 
 
 def get_db_connection():
