@@ -4,26 +4,39 @@ import hashlib
 import datetime
 import os
 from flask import Blueprint, request, session, jsonify, g
+from config import DB_TYPE, MYSQL_CONFIG, POSTGRESQL_CONFIG
+
+try:
+    import psycopg2
+except ImportError:
+    psycopg2 = None
 
 user_bp = Blueprint('user', __name__)
 
-# MySQL配置 - 支持环境变量
-MYSQL_CONFIG = {
-    'host': os.getenv('DB_HOST', 'localhost'),
-    'port': int(os.getenv('DB_PORT', 3306)),
-    'user': os.getenv('DB_USER', 'root'),
-    'password': os.getenv('DB_PASSWORD', '123456'),
-    'database': os.getenv('DB_NAME', 'wjx_survey'),
-    'charset': 'utf8mb4',
-    'autocommit': True
-}
-EMAIL_REGEX = r'^[A-Za-z0-9._%+-]+@(qq\.com|163\.com|126\.com|gmail\.com|outlook\.com|hotmail\.com|sina\.com|foxmail\.com)$'
+# 根据环境选择数据库配置
+if DB_TYPE == 'postgresql':
+    DB_CONFIG = POSTGRESQL_CONFIG
+else:
+    DB_CONFIG = MYSQL_CONFIG
+
+EMAIL_REGEX = r'^[A-Za-z0-9._%+-]+@(qq\.com|163\.com|126\.com|gmail\.com|outlook\.com|hotmail\.com|sina\.com|foxmail\.com)'
 
 # --- 数据库连接 ---
 def get_db():
     db = getattr(g, '_database', None)
     if db is None:
-        db = g._database = pymysql.connect(**MYSQL_CONFIG)
+        if DB_TYPE == 'postgresql':
+            if psycopg2 is None:
+                raise ImportError("psycopg2 is not installed. Install it with: pip install psycopg2-binary")
+            db = g._database = psycopg2.connect(
+                host=DB_CONFIG['host'],
+                port=DB_CONFIG['port'],
+                user=DB_CONFIG['user'],
+                password=DB_CONFIG['password'],
+                database=DB_CONFIG['database']
+            )
+        else:
+            db = g._database = pymysql.connect(**DB_CONFIG)
     return db
 
 @user_bp.teardown_app_request
@@ -41,28 +54,60 @@ def valid_email(email):
 
 # --- 初始化数据库 ---
 def init_db():
-    conn = pymysql.connect(**MYSQL_CONFIG)
+    if DB_TYPE == 'postgresql':
+        if psycopg2 is None:
+            raise ImportError("psycopg2 is not installed. Install it with: pip install psycopg2-binary")
+        conn = psycopg2.connect(
+            host=DB_CONFIG['host'],
+            port=DB_CONFIG['port'],
+            user=DB_CONFIG['user'],
+            password=DB_CONFIG['password'],
+            database=DB_CONFIG['database']
+        )
+    else:
+        conn = pymysql.connect(**DB_CONFIG)
+    
     c = conn.cursor()
     
     # 创建用户表
-    c.execute('''CREATE TABLE IF NOT EXISTS users (
-        id INT PRIMARY KEY AUTO_INCREMENT,
-        email VARCHAR(128) UNIQUE NOT NULL,
-        username VARCHAR(64) NOT NULL,
-        password VARCHAR(128) NOT NULL,
-        points INT DEFAULT 0,
-        last_signin DATE,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )''')
-    
-    # 创建管理员表
-    c.execute('''CREATE TABLE IF NOT EXISTS admins (
-        id INT PRIMARY KEY AUTO_INCREMENT,
-        username VARCHAR(64) UNIQUE NOT NULL,
-        password VARCHAR(128) NOT NULL,
-        phone VARCHAR(20),
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )''')
+    if DB_TYPE == 'postgresql':
+        c.execute('''CREATE TABLE IF NOT EXISTS users (
+            id SERIAL PRIMARY KEY,
+            email VARCHAR(128) UNIQUE NOT NULL,
+            username VARCHAR(64) NOT NULL,
+            password VARCHAR(128) NOT NULL,
+            points INT DEFAULT 0,
+            last_signin DATE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
+        
+        # 创建管理员表
+        c.execute('''CREATE TABLE IF NOT EXISTS admins (
+            id SERIAL PRIMARY KEY,
+            username VARCHAR(64) UNIQUE NOT NULL,
+            password VARCHAR(128) NOT NULL,
+            phone VARCHAR(20),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
+    else:
+        c.execute('''CREATE TABLE IF NOT EXISTS users (
+            id INT PRIMARY KEY AUTO_INCREMENT,
+            email VARCHAR(128) UNIQUE NOT NULL,
+            username VARCHAR(64) NOT NULL,
+            password VARCHAR(128) NOT NULL,
+            points INT DEFAULT 0,
+            last_signin DATE,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )''')
+        
+        # 创建管理员表
+        c.execute('''CREATE TABLE IF NOT EXISTS admins (
+            id INT PRIMARY KEY AUTO_INCREMENT,
+            username VARCHAR(64) UNIQUE NOT NULL,
+            password VARCHAR(128) NOT NULL,
+            phone VARCHAR(20),
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )''')
     
     # 创建默认管理员（如果不存在）
     c.execute('SELECT * FROM admins WHERE username=%s', ('Bear',))
@@ -98,7 +143,7 @@ def register():
                         (email, username, hash_password(password)))
         db.commit()
         return jsonify({'status': 'success', 'message': '注册成功'})
-    except pymysql.err.IntegrityError:
+    except Exception as e:
         return jsonify({'status': 'error', 'message': '该邮箱已被注册'}), 400
 
 # --- 登录 ---
@@ -185,7 +230,7 @@ def signin():
         row = cur.fetchone()
         current_points = row[0] if row else 0
 
-        # 通过条件更新保证“每天只能签到一次”
+        # 通过条件更新保证"每天只能签到一次"
         cur.execute(
             '''
             UPDATE users
@@ -257,9 +302,9 @@ def list_users():
         return jsonify({'status': 'error', 'message': '无权限'}), 403
     db = get_db()
     with db.cursor() as cur:
-        cur.execute('SELECT id, email, username, role, points, last_signin, created_at FROM users')
+        cur.execute('SELECT id, email, username, points, last_signin, created_at FROM users')
         users = cur.fetchall()
-        keys = ['id', 'email', 'username', 'role', 'points', 'last_signin', 'created_at']
+        keys = ['id', 'email', 'username', 'points', 'last_signin', 'created_at']
         return jsonify({'status': 'success', 'data': [dict(zip(keys, u)) for u in users]})
 
 # --- 修改用户名 ---
@@ -307,4 +352,4 @@ def update_password():
 # --- 初始化数据库脚本入口 ---
 if __name__ == '__main__':
     init_db()
-    print('用户表已初始化') 
+    print('用户表已初始化')

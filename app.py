@@ -1,11 +1,23 @@
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, session
 from survey_filler import SurveyFiller
 from survey_parser import SurveyParser
 from user import user_bp, init_db
+from config import DB_TYPE, MYSQL_CONFIG, POSTGRESQL_CONFIG
 import json
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import pymysql
+import hashlib
+import re
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+try:
+    import psycopg2
+except ImportError:
+    psycopg2 = None
 
 # 全局变量用于跟踪进度
 progress_data = {
@@ -19,13 +31,36 @@ progress_data = {
 progress_lock = threading.Lock()
 
 app = Flask(__name__)
-app.secret_key = os.getenv('FLASK_SECRET_KEY', 'wjx_survey_secret_key')
+app.secret_key = 'wjx_survey_secret_key'
 app.register_blueprint(user_bp, url_prefix='/user')
 
+# 初始化数据库
 init_db()
 
-# 获取端口
-PORT = int(os.getenv('PORT', 5000))
+# 数据库配置
+DB_CONFIG = MYSQL_CONFIG if DB_TYPE == 'mysql' else POSTGRESQL_CONFIG
+
+def get_db_connection():
+    """获取数据库连接"""
+    if DB_TYPE == 'postgresql':
+        if psycopg2 is None:
+            raise ImportError("psycopg2 is not installed. Install it with: pip install psycopg2-binary")
+        return psycopg2.connect(
+            host=DB_CONFIG['host'],
+            port=DB_CONFIG['port'],
+            user=DB_CONFIG['user'],
+            password=DB_CONFIG['password'],
+            database=DB_CONFIG['database']
+        )
+    else:
+        return pymysql.connect(**DB_CONFIG)
+
+def hash_password(pw):
+    return hashlib.sha256(pw.encode('utf-8')).hexdigest()
+
+def valid_email(email):
+    EMAIL_REGEX = r'^[A-Za-z0-9._%+-]+@(qq\.com|163\.com|126\.com|gmail\.com|outlook\.com|hotmail\.com|sina\.com|foxmail\.com)'
+    return re.match(EMAIL_REGEX, email)
 
 @app.route('/')
 def index():
@@ -51,8 +86,6 @@ def parse_survey():
 @app.route('/submit', methods=['POST'])
 def submit():
     try:
-        from flask import session
-        
         # 检查用户是否登录
         user_id = session.get('user_id')
         if not user_id:
@@ -88,6 +121,42 @@ def submit():
             progress_data['failed_count'] = 0
             progress_data['is_running'] = True
             progress_data['should_stop'] = False
+        
+        def record_survey_and_deduct_points(uid, survey_url, status):
+            """记录问卷填写并扣积分"""
+            try:
+                conn = get_db_connection()
+                with conn.cursor() as cur:
+                    # 只在成功时扣积分
+                    if status == 'success':
+                        # 扣1个积分
+                        cur.execute('UPDATE users SET points = points - 1 WHERE id = %s AND points > 0', (uid,))
+                        
+                        # 记录问卷填写
+                        cur.execute(
+                            'INSERT INTO survey_records (user_id, survey_url, status, points_deducted) VALUES (%s, %s, %s, %s)',
+                            (uid, survey_url, status, 1)
+                        )
+                        
+                        # 记录积分日志
+                        cur.execute(
+                            'INSERT INTO points_log (user_id, points_change, reason) VALUES (%s, %s, %s)',
+                            (uid, -1, f'填写问卷: {survey_url}')
+                        )
+                        
+                        print(f"用户 {uid} 成功填写问卷，扣除1个积分")
+                    else:
+                        # 失败或错误时不扣积分，但记录
+                        cur.execute(
+                            'INSERT INTO survey_records (user_id, survey_url, status, points_deducted) VALUES (%s, %s, %s, %s)',
+                            (uid, survey_url, status, 0)
+                        )
+                        print(f"用户 {uid} 填写问卷失败，不扣积分")
+                
+                conn.commit()
+                conn.close()
+            except Exception as e:
+                print(f"记录问卷和扣积分时出错: {e}")
         
         # 使用线程池并行填写
         def fill_single_survey(survey_index):
@@ -147,58 +216,11 @@ def submit():
                 except Exception as close_err:
                     print(f"关闭浏览器时出错: {close_err}")
         
-        def record_survey_and_deduct_points(uid, survey_url, status):
-            """记录问卷填写并扣积分"""
-            import pymysql
-            MYSQL_CONFIG = {
-                'host': 'localhost',
-                'port': 3306,
-                'user': 'root',
-                'password': '123456',
-                'database': 'wjx_survey',
-                'charset': 'utf8mb4',
-                'autocommit': True
-            }
-            
-            try:
-                conn = pymysql.connect(**MYSQL_CONFIG)
-                with conn.cursor() as cur:
-                    # 只在成功时扣积分
-                    if status == 'success':
-                        # 扣1个积分
-                        cur.execute('UPDATE users SET points = points - 1 WHERE id = %s AND points > 0', (uid,))
-                        
-                        # 记录问卷填写
-                        cur.execute(
-                            'INSERT INTO survey_records (user_id, survey_url, status, points_deducted) VALUES (%s, %s, %s, %s)',
-                            (uid, survey_url, status, 1)
-                        )
-                        
-                        # 记录积分日志
-                        cur.execute(
-                            'INSERT INTO points_log (user_id, points_change, reason) VALUES (%s, %s, %s)',
-                            (uid, -1, f'填写问卷: {survey_url}')
-                        )
-                        
-                        print(f"用户 {uid} 成功填写问卷，扣除1个积分")
-                    else:
-                        # 失败或错误时不扣积分，但记录
-                        cur.execute(
-                            'INSERT INTO survey_records (user_id, survey_url, status, points_deducted) VALUES (%s, %s, %s, %s)',
-                            (uid, survey_url, status, 0)
-                        )
-                        print(f"用户 {uid} 填写问卷失败，不扣积分")
-                
-                conn.commit()
-                conn.close()
-            except Exception as e:
-                print(f"记录问卷和扣积分时出错: {e}")
-        
         # 在后台线程中执行填写任务
         def run_fill_tasks():
             try:
                 if count > 1:
-                    max_workers = min(count, 10)
+                    max_workers = min(count, 3)
                     print(f"使用 {max_workers} 个并发线程")
                     
                     with ThreadPoolExecutor(max_workers=max_workers) as pool:
@@ -278,23 +300,11 @@ def admin_page():
 @app.route('/survey-records', methods=['GET'])
 def get_survey_records():
     """获取当前用户的问卷填写记录"""
-    from flask import session
     user_id = session.get('user_id')
     if not user_id:
         return jsonify({'status': 'error', 'message': '未登录'}), 401
     
-    import pymysql
-    MYSQL_CONFIG = {
-        'host': 'localhost',
-        'port': 3306,
-        'user': 'root',
-        'password': '123456',
-        'database': 'wjx_survey',
-        'charset': 'utf8mb4',
-        'autocommit': True
-    }
-    
-    conn = pymysql.connect(**MYSQL_CONFIG)
+    conn = get_db_connection()
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -313,23 +323,11 @@ def get_survey_records():
 @app.route('/points-log', methods=['GET'])
 def get_points_log():
     """获取当前用户的积分变化日志"""
-    from flask import session
     user_id = session.get('user_id')
     if not user_id:
         return jsonify({'status': 'error', 'message': '未登录'}), 401
     
-    import pymysql
-    MYSQL_CONFIG = {
-        'host': 'localhost',
-        'port': 3306,
-        'user': 'root',
-        'password': '123456',
-        'database': 'wjx_survey',
-        'charset': 'utf8mb4',
-        'autocommit': True
-    }
-    
-    conn = pymysql.connect(**MYSQL_CONFIG)
+    conn = get_db_connection()
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -348,27 +346,15 @@ def get_points_log():
 @app.route('/admin/users', methods=['GET'])
 def admin_get_users():
     """获取所有用户列表"""
-    from flask import session
     if not session.get('admin_id'):
         return jsonify({'status': 'error', 'message': '无权限'}), 403
     
-    import pymysql
-    MYSQL_CONFIG = {
-        'host': 'localhost',
-        'port': 3306,
-        'user': 'root',
-        'password': '123456',
-        'database': 'wjx_survey',
-        'charset': 'utf8mb4',
-        'autocommit': True
-    }
-    
-    conn = pymysql.connect(**MYSQL_CONFIG)
+    conn = get_db_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute('SELECT id, email, username, role, points, last_signin, created_at FROM users ORDER BY id DESC')
+            cur.execute('SELECT id, email, username, points, last_signin, created_at FROM users ORDER BY id DESC')
             users = cur.fetchall()
-            keys = ['id', 'email', 'username', 'role', 'points', 'last_signin', 'created_at']
+            keys = ['id', 'email', 'username', 'points', 'last_signin', 'created_at']
             return jsonify({
                 'status': 'success',
                 'data': [dict(zip(keys, u)) for u in users]
@@ -379,29 +365,17 @@ def admin_get_users():
 @app.route('/admin/user/<int:user_id>', methods=['GET'])
 def admin_get_user(user_id):
     """获取单个用户信息"""
-    from flask import session
     if not session.get('admin_id'):
         return jsonify({'status': 'error', 'message': '无权限'}), 403
     
-    import pymysql
-    MYSQL_CONFIG = {
-        'host': 'localhost',
-        'port': 3306,
-        'user': 'root',
-        'password': '123456',
-        'database': 'wjx_survey',
-        'charset': 'utf8mb4',
-        'autocommit': True
-    }
-    
-    conn = pymysql.connect(**MYSQL_CONFIG)
+    conn = get_db_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute('SELECT id, email, username, role, points, last_signin, created_at FROM users WHERE id=%s', (user_id,))
+            cur.execute('SELECT id, email, username, points, last_signin, created_at FROM users WHERE id=%s', (user_id,))
             user = cur.fetchone()
             if not user:
                 return jsonify({'status': 'error', 'message': '用户不存在'}), 404
-            keys = ['id', 'email', 'username', 'role', 'points', 'last_signin', 'created_at']
+            keys = ['id', 'email', 'username', 'points', 'last_signin', 'created_at']
             return jsonify({'status': 'success', 'data': dict(zip(keys, user))})
     finally:
         conn.close()
@@ -409,7 +383,6 @@ def admin_get_user(user_id):
 @app.route('/admin/user/<int:user_id>/points', methods=['POST'])
 def admin_update_points(user_id):
     """修改用户积分"""
-    from flask import session
     if not session.get('admin_id'):
         return jsonify({'status': 'error', 'message': '无权限'}), 403
     
@@ -427,18 +400,7 @@ def admin_update_points(user_id):
     if points < 0:
         return jsonify({'status': 'error', 'message': '积分不能为负数'}), 400
     
-    import pymysql
-    MYSQL_CONFIG = {
-        'host': 'localhost',
-        'port': 3306,
-        'user': 'root',
-        'password': '123456',
-        'database': 'wjx_survey',
-        'charset': 'utf8mb4',
-        'autocommit': True
-    }
-    
-    conn = pymysql.connect(**MYSQL_CONFIG)
+    conn = get_db_connection()
     try:
         with conn.cursor() as cur:
             cur.execute('UPDATE users SET points=%s WHERE id=%s', (points, user_id))
@@ -452,7 +414,6 @@ def admin_update_points(user_id):
 @app.route('/admin/add-user', methods=['POST'])
 def admin_add_user():
     """管理员添加用户"""
-    from flask import session
     if not session.get('admin_id'):
         return jsonify({'status': 'error', 'message': '无权限'}), 403
     
@@ -471,42 +432,21 @@ def admin_add_user():
     if len(password) < 6:
         return jsonify({'status': 'error', 'message': '密码至少6位'}), 400
     
-    import pymysql
-    MYSQL_CONFIG = {
-        'host': 'localhost',
-        'port': 3306,
-        'user': 'root',
-        'password': '123456',
-        'database': 'wjx_survey',
-        'charset': 'utf8mb4',
-        'autocommit': True
-    }
-    
-    conn = pymysql.connect(**MYSQL_CONFIG)
+    conn = get_db_connection()
     try:
         with conn.cursor() as cur:
             cur.execute('INSERT INTO users (email, username, password, phone) VALUES (%s, %s, %s, %s)',
                        (email, username, hash_password(password), phone))
         conn.commit()
         return jsonify({'status': 'success', 'message': '用户添加成功'})
-    except pymysql.err.IntegrityError:
+    except Exception as e:
         return jsonify({'status': 'error', 'message': '该邮箱已被注册'}), 400
     finally:
         conn.close()
 
-def valid_email(email):
-    import re
-    EMAIL_REGEX = r'^[A-Za-z0-9._%+-]+@(qq\.com|163\.com|126\.com|gmail\.com|outlook\.com|hotmail\.com|sina\.com|foxmail\.com)'
-    return re.match(EMAIL_REGEX, email)
-
-def hash_password(pw):
-    import hashlib
-    return hashlib.sha256(pw.encode('utf-8')).hexdigest()
-
 @app.route('/admin/user/<int:user_id>/role', methods=['POST'])
 def admin_update_role(user_id):
     """修改用户角色"""
-    from flask import session
     if not session.get('admin_id'):
         return jsonify({'status': 'error', 'message': '无权限'}), 403
     
@@ -516,18 +456,7 @@ def admin_update_role(user_id):
     if role not in ['user', 'admin']:
         return jsonify({'status': 'error', 'message': '角色只能是user或admin'}), 400
     
-    import pymysql
-    MYSQL_CONFIG = {
-        'host': 'localhost',
-        'port': 3306,
-        'user': 'root',
-        'password': '123456',
-        'database': 'wjx_survey',
-        'charset': 'utf8mb4',
-        'autocommit': True
-    }
-    
-    conn = pymysql.connect(**MYSQL_CONFIG)
+    conn = get_db_connection()
     try:
         with conn.cursor() as cur:
             cur.execute('UPDATE users SET role=%s WHERE id=%s', (role, user_id))
@@ -541,22 +470,10 @@ def admin_update_role(user_id):
 @app.route('/admin/user/<int:user_id>', methods=['DELETE'])
 def admin_delete_user(user_id):
     """删除用户"""
-    from flask import session
     if not session.get('admin_id'):
         return jsonify({'status': 'error', 'message': '无权限'}), 403
     
-    import pymysql
-    MYSQL_CONFIG = {
-        'host': 'localhost',
-        'port': 3306,
-        'user': 'root',
-        'password': '123456',
-        'database': 'wjx_survey',
-        'charset': 'utf8mb4',
-        'autocommit': True
-    }
-    
-    conn = pymysql.connect(**MYSQL_CONFIG)
+    conn = get_db_connection()
     try:
         with conn.cursor() as cur:
             cur.execute('DELETE FROM users WHERE id=%s', (user_id,))
@@ -568,6 +485,6 @@ def admin_delete_user(user_id):
         conn.close()
 
 if __name__ == '__main__':
-    # 在本地开发时使用debug模式
-    debug_mode = os.getenv('FLASK_ENV') == 'development'
-    app.run(host='0.0.0.0', port=PORT, debug=debug_mode) 
+    port = int(os.environ.get('PORT', 5000))
+    debug = os.environ.get('FLASK_ENV') == 'development'
+    app.run(host='0.0.0.0', port=port, debug=debug)

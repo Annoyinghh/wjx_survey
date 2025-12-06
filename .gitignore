@@ -1,4 +1,3 @@
-# Python
 __pycache__/
 *.py[cod]
 *$py.class
@@ -22,21 +21,7 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Project specific
-failure_screenshots/
-debug_page_source.html
-*.log
 .env
 .env.local
+.DS_Store
+*.log
