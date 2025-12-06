@@ -53,6 +53,12 @@ else:
     
     print(f"[CONFIG] 使用 {DB_TYPE.upper()} (本地开发)")
 
+# 设置 DB_CONFIG（根据 DB_TYPE 选择）
+if DB_TYPE == 'postgresql':
+    DB_CONFIG = POSTGRESQL_CONFIG
+else:
+    DB_CONFIG = MYSQL_CONFIG
+
 # Flask 配置
 SECRET_KEY = os.getenv('SECRET_KEY', 'wjx_survey_secret_key')
 DEBUG = os.getenv('DEBUG', 'True').lower() == 'true' if ENV == 'local' else False
