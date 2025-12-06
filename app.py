@@ -6,7 +6,6 @@ from config import DB_TYPE, MYSQL_CONFIG, POSTGRESQL_CONFIG
 import json
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import pymysql
 import hashlib
 import re
 import os
@@ -38,22 +37,19 @@ app.register_blueprint(user_bp, url_prefix='/user')
 init_db()
 
 # 数据库配置
-DB_CONFIG = MYSQL_CONFIG if DB_TYPE == 'mysql' else POSTGRESQL_CONFIG
+DB_CONFIG = POSTGRESQL_CONFIG
 
 def get_db_connection():
     """获取数据库连接"""
-    if DB_TYPE == 'postgresql':
-        if psycopg2 is None:
-            raise ImportError("psycopg2 is not installed. Install it with: pip install psycopg2-binary")
-        return psycopg2.connect(
-            host=DB_CONFIG['host'],
-            port=DB_CONFIG['port'],
-            user=DB_CONFIG['user'],
-            password=DB_CONFIG['password'],
-            database=DB_CONFIG['database']
-        )
-    else:
-        return pymysql.connect(**DB_CONFIG)
+    if psycopg2 is None:
+        raise ImportError("psycopg2 is not installed. Install it with: pip install psycopg2-binary")
+    return psycopg2.connect(
+        host=DB_CONFIG['host'],
+        port=DB_CONFIG['port'],
+        user=DB_CONFIG['user'],
+        password=DB_CONFIG['password'],
+        database=DB_CONFIG['database']
+    )
 
 def hash_password(pw):
     return hashlib.sha256(pw.encode('utf-8')).hexdigest()

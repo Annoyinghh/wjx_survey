@@ -1,4 +1,3 @@
-import pymysql
 import re
 import hashlib
 import datetime
