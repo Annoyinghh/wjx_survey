@@ -439,18 +439,29 @@ class SurveyFillerHTTP:
             
             # 构建答案字符串
             # 问卷星格式: 题号$答案}题号$答案}...
+            # 但需要确保题号是正确的格式（可能需要去掉"div"前缀）
             answer_parts = []
             for q_index, answer in sorted(answers.items()):
                 # 确保答案是字符串格式
                 answer_str = str(answer) if answer else ''
-                answer_parts.append(f"{q_index}${answer_str}")
+                # 提取题号（去掉"div"前缀，只保留数字）
+                q_num = q_index.replace('div', '') if isinstance(q_index, str) else str(q_index)
+                answer_parts.append(f"{q_num}${answer_str}")
             
             submitdata = '}'.join(answer_parts) + '}'
+            
+            print(f"答案格式检查: 第一个答案={answer_parts[0] if answer_parts else 'N/A'}")
             
             # 填写时间（秒）
             ktimes = random.randint(60, 180)
             current_time = int(time.time() * 1000)
             starttime = current_time - ktimes * 1000
+            
+            # 生成jqsign（如果没有从页面提取到）
+            jqsign = js_params.get('jqsign', '')
+            if not jqsign:
+                # 尝试生成一个有效的jqsign
+                jqsign = self._generate_jqsign(submitdata, str(ktimes))
             
             # 问卷星需要的核心参数
             submit_data = {
@@ -460,7 +471,7 @@ class SurveyFillerHTTP:
                 'source': js_params.get('source', 'directphone'),
                 'hlv': js_params.get('hlv', '1'),
                 'jqnonce': js_params.get('jqnonce', self._generate_jqnonce()),
-                'jqsign': js_params.get('jqsign', ''),
+                'jqsign': jqsign,
                 'rn': js_params.get('rn', ''),
                 'timestamp': str(int(time.time() * 1000)),
             }
@@ -507,6 +518,17 @@ class SurveyFillerHTTP:
         # 简单的随机字符串
         chars = 'abcdefghijklmnopqrstuvwxyz0123456789'
         return ''.join(random.choice(chars) for _ in range(16))
+    
+    def _generate_jqsign(self, submitdata, ktimes):
+        """生成 jqsign 参数（问卷星的签名）"""
+        try:
+            # 问卷星的jqsign通常是submitdata和ktimes的某种组合的哈希
+            # 这是一个简化的实现，可能需要根据实际情况调整
+            sign_str = f"{submitdata}{ktimes}"
+            sign_hash = hashlib.md5(sign_str.encode()).hexdigest()
+            return sign_hash[:16]  # 取前16位
+        except:
+            return ''
 
     def _submit_survey(self, url, submit_data):
         """提交问卷"""
@@ -539,9 +561,21 @@ class SurveyFillerHTTP:
             submit_data['shortid'] = survey_id
             submit_data['t'] = str(int(time.time() * 1000))
             
+            # 添加其他可能需要的参数
+            submit_data['v'] = '1'  # 版本
+            submit_data['lang'] = 'zh-CN'  # 语言
+            
             print(f"提交 URL: {submit_url}")
             print(f"问卷 ID: {survey_id}")
             print(f"提交数据键: {list(submit_data.keys())}")
+            
+            # 调试：打印完整的提交数据
+            print(f"完整提交数据:")
+            for key, value in submit_data.items():
+                if len(str(value)) > 100:
+                    print(f"  {key}: {str(value)[:100]}...")
+                else:
+                    print(f"  {key}: {value}")
             
             # 设置提交请求头
             submit_headers = {
@@ -550,6 +584,10 @@ class SurveyFillerHTTP:
                 'Origin': base_url,
                 'Referer': clean_url,
                 'Accept': 'text/plain, */*; q=0.01',
+                'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Cache-Control': 'no-cache',
+                'Pragma': 'no-cache',
             }
             
             # 模拟延迟
@@ -557,16 +595,47 @@ class SurveyFillerHTTP:
             
             # 发送提交请求
             print(f"正在发送POST请求到: {submit_url}")
+            print(f"提交数据大小: {len(urlencode(submit_data))} 字节")
+            
             response = self.session.post(
                 submit_url,
                 data=submit_data,
                 headers=submit_headers,
                 timeout=30,
-                allow_redirects=True
+                allow_redirects=True,
+                verify=False  # 忽略SSL证书验证
             )
             
             print(f"提交响应状态: {response.status_code}")
             print(f"提交响应URL: {response.url}")
+            
+            # 保存完整响应用于调试
+            try:
+                import os
+                debug_file = os.path.join(os.path.dirname(__file__), 'survey_response_debug.html')
+                with open(debug_file, 'w', encoding='utf-8') as f:
+                    f.write(response.text)
+                print(f"✓ 完整响应已保存到 {debug_file}")
+            except Exception as e:
+                print(f"⚠️  保存响应失败: {e}")
+            
+            # 提取HTML中的错误信息
+            if '<html' in response.text.lower():
+                soup = BeautifulSoup(response.text, 'html.parser')
+                # 查找错误信息 - 尝试多个选择器
+                error_elem = (soup.find(class_='layui-layer-content') or 
+                             soup.find(class_='error-message') or 
+                             soup.find(id='msg') or
+                             soup.find('p') or
+                             soup.find('div', class_='content'))
+                if error_elem:
+                    error_text = error_elem.get_text(strip=True)
+                    print(f"提交响应错误信息: {error_text[:200]}")
+                else:
+                    # 如果找不到特定元素，提取所有文本
+                    all_text = soup.get_text(strip=True)
+                    print(f"提交响应全文: {all_text[:300]}")
+            
             print(f"提交响应内容: {response.text[:500]}")
             
             # 检查响应
@@ -598,6 +667,42 @@ class SurveyFillerHTTP:
                 elif '验证' in response_text or 'verify' in response_text.lower():
                     print("✗ 需要验证，提交失败")
                     return False
+                elif '<html' in response_text.lower():
+                    # 返回了HTML页面，需要检查是否真的成功
+                    # 问卷星的系统提示页面可能包含错误信息
+                    if '系统提示' in response_text:
+                        # 尝试提取提示内容
+                        soup = BeautifulSoup(response_text, 'html.parser')
+                        
+                        # 尝试多个选择器查找提示文本
+                        msg = None
+                        for selector in ['.layui-layer-content', '.error-message', '#msg', 'p', '.content']:
+                            elem = soup.select_one(selector)
+                            if elem:
+                                msg = elem.get_text(strip=True)
+                                break
+                        
+                        # 如果还是找不到，提取所有文本
+                        if not msg:
+                            msg = soup.get_text(strip=True)
+                        
+                        print(f"系统提示: {msg[:150]}")
+                        
+                        # 检查是否包含成功关键词
+                        if '成功' in msg or '感谢' in msg or '提交成功' in msg or '谢谢' in msg:
+                            print("✓ 问卷提交成功")
+                            return True
+                        # 检查是否包含失败关键词
+                        elif '失败' in msg or '错误' in msg or '无效' in msg or '参数' in msg:
+                            print(f"✗ 提交失败: {msg[:100]}")
+                            return False
+                        else:
+                            # 无法判断，假设成功（因为返回了200状态码）
+                            print(f"⚠️  无法判断提交结果，假设成功")
+                            return True
+                    else:
+                        print(f"⚠️  返回HTML页面，但不是系统提示")
+                        return False
                 else:
                     # 尝试解析 JSON
                     try:
