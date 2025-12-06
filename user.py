@@ -10,6 +10,11 @@ try:
 except ImportError:
     psycopg2 = None
 
+try:
+    import pymysql
+except ImportError:
+    pymysql = None
+
 user_bp = Blueprint('user', __name__)
 
 # 根据环境选择数据库配置
@@ -64,6 +69,8 @@ def init_db():
             database=DB_CONFIG['database']
         )
     else:
+        if pymysql is None:
+            raise ImportError("pymysql is not installed. Install it with: pip install pymysql")
         conn = pymysql.connect(**DB_CONFIG)
     
     c = conn.cursor()

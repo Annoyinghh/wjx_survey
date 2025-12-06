@@ -18,6 +18,11 @@ try:
 except ImportError:
     psycopg2 = None
 
+try:
+    import pymysql
+except ImportError:
+    pymysql = None
+
 # 全局变量用于跟踪进度
 progress_data = {
     'current': 0,
@@ -37,19 +42,24 @@ app.register_blueprint(user_bp, url_prefix='/user')
 init_db()
 
 # 数据库配置
-DB_CONFIG = POSTGRESQL_CONFIG
+DB_CONFIG = MYSQL_CONFIG if DB_TYPE == 'mysql' else POSTGRESQL_CONFIG
 
 def get_db_connection():
     """获取数据库连接"""
-    if psycopg2 is None:
-        raise ImportError("psycopg2 is not installed. Install it with: pip install psycopg2-binary")
-    return psycopg2.connect(
-        host=DB_CONFIG['host'],
-        port=DB_CONFIG['port'],
-        user=DB_CONFIG['user'],
-        password=DB_CONFIG['password'],
-        database=DB_CONFIG['database']
-    )
+    if DB_TYPE == 'postgresql':
+        if psycopg2 is None:
+            raise ImportError("psycopg2 is not installed. Install it with: pip install psycopg2-binary")
+        return psycopg2.connect(
+            host=DB_CONFIG['host'],
+            port=DB_CONFIG['port'],
+            user=DB_CONFIG['user'],
+            password=DB_CONFIG['password'],
+            database=DB_CONFIG['database']
+        )
+    else:
+        if pymysql is None:
+            raise ImportError("pymysql is not installed. Install it with: pip install pymysql")
+        return pymysql.connect(**DB_CONFIG)
 
 def hash_password(pw):
     return hashlib.sha256(pw.encode('utf-8')).hexdigest()
