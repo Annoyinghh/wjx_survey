@@ -63,11 +63,19 @@ SECRET_KEY=your-random-secret-key
 
 ### 第5步：初始化数据库
 
-部署完成后，在 Web Service 页面点击 "Shell"，运行：
+部署完成后，在 Web Service 页面点击 "Shell"，运行以下命令之一：
 
+**方式A（推荐）：**
+```bash
+python init_db.py
+```
+
+**方式B：**
 ```bash
 python -c "from user import init_db; init_db()"
 ```
+
+看到 "✓ 数据库初始化成功！" 即可。
 
 ### 第6步：访问应用
 

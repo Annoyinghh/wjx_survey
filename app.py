@@ -38,11 +38,15 @@ app = Flask(__name__)
 app.secret_key = 'wjx_survey_secret_key'
 app.register_blueprint(user_bp, url_prefix='/user')
 
-# 初始化数据库
-init_db()
-
 # 数据库配置
 DB_CONFIG = MYSQL_CONFIG if DB_TYPE == 'mysql' else POSTGRESQL_CONFIG
+
+# 仅在本地开发环境初始化数据库
+if os.getenv('FLASK_ENV') != 'production':
+    try:
+        init_db()
+    except Exception as e:
+        print(f"数据库初始化警告: {e}")
 
 def get_db_connection():
     """获取数据库连接"""
