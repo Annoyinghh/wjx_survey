@@ -25,7 +25,7 @@ cd pythonProject/wjx_survey
 git init
 git add .
 git commit -m "wjx_survey deployment"
-git remote add origin https://github.com/your-username/wjx_survey.git
+git remote add origin https://github.com/Annoyinghh/wjx_survey.git
 git branch -M main
 git push -u origin main
 ```
@@ -33,7 +33,7 @@ git push -u origin main
 ### 第2步：在 Render 创建数据库
 
 1. 访问 https://render.com
-2. 点击 "New +" → "PostgreSQL"
+2. 点击 "New +" → " "
 3. 填写：
    - Name: `wjx-survey-db`
    - Database: `wjx_survey`
