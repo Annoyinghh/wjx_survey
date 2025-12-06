@@ -441,9 +441,11 @@ class SurveyFillerHTTP:
             # 问卷星格式: 题号$答案}题号$答案}...
             answer_parts = []
             for q_index, answer in sorted(answers.items()):
-                answer_parts.append(f"{q_index}${answer}")
+                # 确保答案是字符串格式
+                answer_str = str(answer) if answer else ''
+                answer_parts.append(f"{q_index}${answer_str}")
             
-            submitdata = '}' .join(answer_parts) + '}'
+            submitdata = '}'.join(answer_parts) + '}'
             
             # 填写时间（秒）
             ktimes = random.randint(60, 180)
@@ -460,12 +462,14 @@ class SurveyFillerHTTP:
                 'jqnonce': js_params.get('jqnonce', self._generate_jqnonce()),
                 'jqsign': js_params.get('jqsign', ''),
                 'rn': js_params.get('rn', ''),
+                'timestamp': str(int(time.time() * 1000)),
             }
             
             # 移除空值
             submit_data = {k: v for k, v in submit_data.items() if v}
             
             print(f"提交数据: {json.dumps(submit_data, ensure_ascii=False, indent=2)}")
+            print(f"答案数据: {submitdata[:200]}...")
             
         except Exception as e:
             print(f"构建提交数据时出错: {e}")
@@ -537,6 +541,7 @@ class SurveyFillerHTTP:
             
             print(f"提交 URL: {submit_url}")
             print(f"问卷 ID: {survey_id}")
+            print(f"提交数据键: {list(submit_data.keys())}")
             
             # 设置提交请求头
             submit_headers = {
@@ -551,26 +556,29 @@ class SurveyFillerHTTP:
             time.sleep(random.uniform(1, 3))
             
             # 发送提交请求
+            print(f"正在发送POST请求到: {submit_url}")
             response = self.session.post(
                 submit_url,
                 data=submit_data,
                 headers=submit_headers,
-                timeout=30
+                timeout=30,
+                allow_redirects=True
             )
             
             print(f"提交响应状态: {response.status_code}")
+            print(f"提交响应URL: {response.url}")
             print(f"提交响应内容: {response.text[:500]}")
             
             # 检查响应
             if response.status_code == 200:
-                response_text = response.text
+                response_text = response.text.strip()
                 
                 # 问卷星返回格式通常是数字或 JSON
                 # 10 = 成功, 1 = 需要验证, 2 = 重复提交等
-                if response_text.strip() == '10':
-                    print("问卷提交成功 (返回码: 10)")
+                if response_text == '10':
+                    print("✓ 问卷提交成功 (返回码: 10)")
                     return True
-                elif response_text.strip() in ['1', '2', '3', '4', '5', '6', '7', '8', '9']:
+                elif response_text in ['1', '2', '3', '4', '5', '6', '7', '8', '9']:
                     error_codes = {
                         '1': '需要验证码',
                         '2': '重复提交',
@@ -582,21 +590,24 @@ class SurveyFillerHTTP:
                         '8': '时间限制',
                         '9': '其他错误',
                     }
-                    print(f"提交失败: {error_codes.get(response_text.strip(), '未知错误')} (返回码: {response_text.strip()})")
+                    print(f"✗ 提交失败: {error_codes.get(response_text, '未知错误')} (返回码: {response_text})")
                     return False
                 elif '成功' in response_text or 'success' in response_text.lower() or '感谢' in response_text:
-                    print("问卷提交成功")
+                    print("✓ 问卷提交成功")
                     return True
                 elif '验证' in response_text or 'verify' in response_text.lower():
-                    print("需要验证，提交失败")
+                    print("✗ 需要验证，提交失败")
                     return False
                 else:
                     # 尝试解析 JSON
                     try:
                         result = json.loads(response_text)
                         if result.get('code') == 10 or result.get('success'):
-                            print("问卷提交成功 (JSON)")
+                            print("✓ 问卷提交成功 (JSON)")
                             return True
+                        else:
+                            print(f"✗ JSON响应: {result}")
+                            return False
                     except:
                         pass
                     
@@ -604,7 +615,7 @@ class SurveyFillerHTTP:
                     # 如果没有明确错误，假设成功
                     return True
             else:
-                print(f"提交失败: HTTP {response.status_code}")
+                print(f"✗ 提交失败: HTTP {response.status_code}")
                 return False
                 
         except Exception as e:
