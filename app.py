@@ -18,10 +18,10 @@ try:
 except ImportError:
     psycopg2 = None
 
-try:
-    import pymysql
-except ImportError:
-    pymysql = None
+# try:
+#     import pymysql
+# except ImportError:
+#     pymysql = None
 
 # 全局变量用于跟踪进度
 progress_data = {
@@ -38,13 +38,16 @@ app = Flask(__name__)
 app.secret_key = 'wjx_survey_secret_key'
 app.register_blueprint(user_bp, url_prefix='/user')
 
-# 数据库配置 - 云端环境强制使用 PostgreSQL
-if os.getenv('DATABASE_URL') or os.getenv('FLASK_ENV') == 'production':
-    DB_CONFIG = POSTGRESQL_CONFIG
-    _USE_POSTGRESQL = True
-else:
-    DB_CONFIG = MYSQL_CONFIG if DB_TYPE == 'mysql' else POSTGRESQL_CONFIG
-    _USE_POSTGRESQL = (DB_TYPE == 'postgresql')
+# 数据库配置 - 当前仅使用 PostgreSQL
+DB_CONFIG = POSTGRESQL_CONFIG
+
+# # MySQL 备用代码（本地开发）
+# if os.getenv('DATABASE_URL') or os.getenv('FLASK_ENV') == 'production':
+#     DB_CONFIG = POSTGRESQL_CONFIG
+#     _USE_POSTGRESQL = True
+# else:
+#     DB_CONFIG = MYSQL_CONFIG if DB_TYPE == 'mysql' else POSTGRESQL_CONFIG
+#     _USE_POSTGRESQL = (DB_TYPE == 'postgresql')
 
 # 仅在本地开发环境初始化数据库
 if os.getenv('FLASK_ENV') != 'production':
@@ -55,23 +58,34 @@ if os.getenv('FLASK_ENV') != 'production':
 
 def get_db_connection():
     """获取数据库连接"""
-    # 云端环境强制使用 PostgreSQL
-    use_postgresql = os.getenv('DATABASE_URL') or os.getenv('FLASK_ENV') == 'production' or _USE_POSTGRESQL
+    # 当前仅使用 PostgreSQL
+    if psycopg2 is None:
+        raise ImportError("psycopg2 is not installed. Install it with: pip install psycopg2-binary")
+    return psycopg2.connect(
+        host=DB_CONFIG['host'],
+        port=DB_CONFIG['port'],
+        user=DB_CONFIG['user'],
+        password=DB_CONFIG['password'],
+        database=DB_CONFIG['database']
+    )
     
-    if use_postgresql:
-        if psycopg2 is None:
-            raise ImportError("psycopg2 is not installed. Install it with: pip install psycopg2-binary")
-        return psycopg2.connect(
-            host=DB_CONFIG['host'],
-            port=DB_CONFIG['port'],
-            user=DB_CONFIG['user'],
-            password=DB_CONFIG['password'],
-            database=DB_CONFIG['database']
-        )
-    else:
-        if pymysql is None:
-            raise ImportError("pymysql is not installed. Install it with: pip install pymysql")
-        return pymysql.connect(**DB_CONFIG)
+    # # MySQL 备用代码（本地开发）
+    # use_postgresql = os.getenv('DATABASE_URL') or os.getenv('FLASK_ENV') == 'production' or _USE_POSTGRESQL
+    # 
+    # if use_postgresql:
+    #     if psycopg2 is None:
+    #         raise ImportError("psycopg2 is not installed. Install it with: pip install psycopg2-binary")
+    #     return psycopg2.connect(
+    #         host=DB_CONFIG['host'],
+    #         port=DB_CONFIG['port'],
+    #         user=DB_CONFIG['user'],
+    #         password=DB_CONFIG['password'],
+    #         database=DB_CONFIG['database']
+    #     )
+    # else:
+    #     if pymysql is None:
+    #         raise ImportError("pymysql is not installed. Install it with: pip install pymysql")
+    #     return pymysql.connect(**DB_CONFIG)
 
 def hash_password(pw):
     return hashlib.sha256(pw.encode('utf-8')).hexdigest()
