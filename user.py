@@ -33,7 +33,10 @@ EMAIL_REGEX = r'^[A-Za-z0-9._%+-]+@(qq\.com|163\.com|126\.com|gmail\.com|outlook
 def get_db():
     db = getattr(g, '_database', None)
     if db is None:
-        if DB_TYPE == 'postgresql':
+        # 云端环境强制使用 PostgreSQL
+        use_postgresql = os.getenv('FLASK_ENV') == 'production' or os.getenv('DATABASE_URL') or DB_TYPE == 'postgresql'
+        
+        if use_postgresql:
             if psycopg2 is None:
                 raise ImportError("psycopg2 is not installed. Install it with: pip install psycopg2-binary")
             db = g._database = psycopg2.connect(
@@ -44,6 +47,8 @@ def get_db():
                 database=DB_CONFIG['database']
             )
         else:
+            if pymysql is None:
+                raise ImportError("pymysql is not installed. Install it with: pip install pymysql")
             db = g._database = pymysql.connect(**DB_CONFIG)
     return db
 
