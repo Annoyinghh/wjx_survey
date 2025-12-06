@@ -1,0 +1,23 @@
+⚠️  紧急：需要在 Render 中设置环境变量
+
+当前问题：应用连接到 localhost:5432，而不是云端数据库
+
+解决方案：在 Render Web Service 中添加 DATABASE_URL 环境变量
+
+步骤：
+1. 访问 https://dashboard.render.com
+2. 选择 Web Service "wjx-survey"
+3. 点击 "Environment" 标签
+4. 点击 "Add Environment Variable"
+5. 添加以下变量：
+
+KEY: DATABASE_URL
+VALUE: postgresql://wjx_survey_db_ld9r_user:awy3dVvk7u77Y0WG25rbbc5cqD9NeYyS@dpg-d4pv20e3jp1c73985c6g-a.singapore-postgres.render.com:5432/wjx_survey_db_ld9r
+
+6. 点击 "Save"
+7. Render 会自动重新部署
+
+完成后，应用会连接到正确的数据库。
+
+如果还有问题，在 Render Shell 中运行：
+python setup_cloud.py
