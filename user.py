@@ -33,23 +33,33 @@ EMAIL_REGEX = r'^[A-Za-z0-9._%+-]+@(qq\.com|163\.com|126\.com|gmail\.com|outlook
 def get_db():
     db = getattr(g, '_database', None)
     if db is None:
-        # 云端环境强制使用 PostgreSQL
-        use_postgresql = os.getenv('FLASK_ENV') == 'production' or os.getenv('DATABASE_URL') or DB_TYPE == 'postgresql'
+        # 检查是否在云端环境
+        is_production = os.getenv('FLASK_ENV') == 'production' or os.getenv('DATABASE_URL')
         
-        if use_postgresql:
+        if is_production or DB_TYPE == 'postgresql':
+            # 云端或 PostgreSQL 环境
             if psycopg2 is None:
                 raise ImportError("psycopg2 is not installed. Install it with: pip install psycopg2-binary")
-            db = g._database = psycopg2.connect(
-                host=DB_CONFIG['host'],
-                port=DB_CONFIG['port'],
-                user=DB_CONFIG['user'],
-                password=DB_CONFIG['password'],
-                database=DB_CONFIG['database']
-            )
+            try:
+                db = g._database = psycopg2.connect(
+                    host=DB_CONFIG['host'],
+                    port=DB_CONFIG['port'],
+                    user=DB_CONFIG['user'],
+                    password=DB_CONFIG['password'],
+                    database=DB_CONFIG['database']
+                )
+            except Exception as e:
+                print(f"[ERROR] PostgreSQL 连接失败: {e}")
+                raise
         else:
+            # 本地 MySQL 环境
             if pymysql is None:
                 raise ImportError("pymysql is not installed. Install it with: pip install pymysql")
-            db = g._database = pymysql.connect(**DB_CONFIG)
+            try:
+                db = g._database = pymysql.connect(**DB_CONFIG)
+            except Exception as e:
+                print(f"[ERROR] MySQL 连接失败: {e}")
+                raise
     return db
 
 @user_bp.teardown_app_request
