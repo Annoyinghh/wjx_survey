@@ -203,10 +203,10 @@ class SurveyFillerSelenium:
             
             for q in questions:
                 self._fill_question(q)
-                self._human_delay(0.5, 1.5)
+                self._human_delay(1, 2.5)  # 增加延迟，更像人类
             
             # 提交问卷
-            self._human_delay(1, 2, "准备提交")
+            self._human_delay(2, 4, "准备提交")
             result = self._submit()
             
             return result

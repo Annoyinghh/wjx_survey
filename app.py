@@ -225,16 +225,16 @@ def submit():
         def run_fill_tasks():
             try:
                 if count > 1:
-                    # 限制并发数为2-3个，避免同时启动太多浏览器导致网络错误
-                    max_workers = min(count, 2)
-                    print(f"使用 {max_workers} 个并发线程（限制并发避免网络错误）")
+                    # 限制并发数为2个，避免被问卷星检测
+                    max_workers = min(count, 10)
+                    print(f"使用 {max_workers} 个并发线程")
                     
                     with ThreadPoolExecutor(max_workers=max_workers) as pool:
                         futures = []
                         for i in range(count):
-                            # 每个任务之间间隔1-2秒，避免同时请求ChromeDriver
+                            # 每个任务之间间隔3秒，降低被检测风险
                             if i > 0:
-                                time.sleep(1.5)
+                                time.sleep(3)
                             futures.append(pool.submit(fill_single_survey, i+1))
                         
                         for future in as_completed(futures):
