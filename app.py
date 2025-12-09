@@ -6,6 +6,7 @@ from survey_parser_http import SurveyParserHTTP as SurveyParser
 import json
 import time
 import threading
+import random
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 import re
@@ -225,16 +226,18 @@ def submit():
         def run_fill_tasks():
             try:
                 if count > 1:
-                    # 限制并发数为2个，避免被问卷星检测
-                    max_workers = min(count, 10)
-                    print(f"使用 {max_workers} 个并发线程")
+                    # 限制并发数为3个，避免被问卷星检测
+                    max_workers = min(count, 5)
+                    print(f"使用 {max_workers} 个并发线程（低并发模式，防检测）")
                     
                     with ThreadPoolExecutor(max_workers=max_workers) as pool:
                         futures = []
                         for i in range(count):
-                            # 每个任务之间间隔3秒，降低被检测风险
+                            # 每个任务之间随机间隔 15-45 秒，大幅降低被检测风险
                             if i > 0:
-                                time.sleep(3)
+                                delay = random.randint(15, 45)
+                                print(f"等待 {delay} 秒后启动下一份问卷...")
+                                time.sleep(delay)
                             futures.append(pool.submit(fill_single_survey, i+1))
                         
                         for future in as_completed(futures):

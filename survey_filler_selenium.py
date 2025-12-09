@@ -8,6 +8,7 @@ import time
 import json
 import re
 import os
+from datetime import datetime
 
 try:
     from selenium import webdriver
@@ -114,17 +115,117 @@ class SurveyFillerSelenium:
                 self.driver = webdriver.Chrome(options=options)
                 self.wait = WebDriverWait(self.driver, 20)
                 
-                # 执行反检测脚本
+                # 【关键】在页面加载前注入反检测脚本
+                # 必须在访问任何页面之前执行，这样JS才能在页面加载时生效
+                stealth_js = '''
+                    // 1. 隐藏 webdriver 属性（最关键）
+                    Object.defineProperty(navigator, 'webdriver', {
+                        get: () => undefined,
+                        configurable: true
+                    });
+                    
+                    // 2. 删除 webdriver 相关痕迹
+                    delete navigator.__proto__.webdriver;
+                    
+                    // 3. 模拟真实的 plugins
+                    Object.defineProperty(navigator, 'plugins', {
+                        get: () => {
+                            const plugins = [
+                                {name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format'},
+                                {name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: ''},
+                                {name: 'Native Client', filename: 'internal-nacl-plugin', description: ''}
+                            ];
+                            plugins.length = 3;
+                            return plugins;
+                        },
+                        configurable: true
+                    });
+                    
+                    // 4. 模拟真实的 languages
+                    Object.defineProperty(navigator, 'languages', {
+                        get: () => ['zh-CN', 'zh', 'en-US', 'en'],
+                        configurable: true
+                    });
+                    
+                    // 5. 模拟 chrome 对象
+                    window.chrome = {
+                        runtime: {
+                            connect: function() {},
+                            sendMessage: function() {}
+                        },
+                        loadTimes: function() {
+                            return {
+                                commitLoadTime: Date.now() / 1000,
+                                connectionInfo: "http/1.1",
+                                finishDocumentLoadTime: Date.now() / 1000,
+                                finishLoadTime: Date.now() / 1000,
+                                firstPaintAfterLoadTime: 0,
+                                firstPaintTime: Date.now() / 1000,
+                                navigationType: "Other",
+                                npnNegotiatedProtocol: "unknown",
+                                requestTime: Date.now() / 1000,
+                                startLoadTime: Date.now() / 1000,
+                                wasAlternateProtocolAvailable: false,
+                                wasFetchedViaSpdy: false,
+                                wasNpnNegotiated: false
+                            };
+                        },
+                        csi: function() {
+                            return {
+                                onloadT: Date.now(),
+                                pageT: Date.now(),
+                                startE: Date.now(),
+                                tran: 15
+                            };
+                        }
+                    };
+                    
+                    // 6. 修改 permissions 查询
+                    const originalQuery = window.navigator.permissions.query;
+                    window.navigator.permissions.query = (parameters) => (
+                        parameters.name === 'notifications' ?
+                            Promise.resolve({ state: Notification.permission }) :
+                            originalQuery(parameters)
+                    );
+                    
+                    // 7. 隐藏自动化相关的属性
+                    Object.defineProperty(navigator, 'maxTouchPoints', {
+                        get: () => 1,
+                        configurable: true
+                    });
+                    
+                    // 8. 模拟真实的 platform
+                    Object.defineProperty(navigator, 'platform', {
+                        get: () => 'Win32',
+                        configurable: true
+                    });
+                    
+                    // 9. 隐藏 Headless 特征
+                    Object.defineProperty(navigator, 'hardwareConcurrency', {
+                        get: () => 8,
+                        configurable: true
+                    });
+                    
+                    // 10. 覆盖 toString 方法防止检测
+                    const oldCall = Function.prototype.call;
+                    function call() {
+                        return oldCall.apply(this, arguments);
+                    }
+                    Function.prototype.call = call;
+                    
+                    // 11. 防止通过 iframe 检测
+                    const iframe = document.createElement('iframe');
+                    iframe.style.display = 'none';
+                    document.body.appendChild && document.body.appendChild(iframe);
+                    
+                    console.log('[反检测] 脚本已注入');
+                '''
+                
                 self.driver.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument', {
-                    'source': '''
-                        Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-                        Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
-                        Object.defineProperty(navigator, 'languages', {get: () => ['zh-CN', 'zh', 'en']});
-                        window.chrome = {runtime: {}};
-                    '''
+                    'source': stealth_js
                 })
                 
-                print("✓ 浏览器初始化完成")
+                print("✓ 浏览器初始化完成（已注入反检测脚本）")
                 return
                 
             except Exception as e:
@@ -402,22 +503,47 @@ class SurveyFillerSelenium:
         if not options:
             options = element.find_elements(By.CSS_SELECTOR, 'input[type="radio"]')
             if options:
-                # 点击 label 而不是 input
                 options = [opt.find_element(By.XPATH, '..') for opt in options]
         
         if not options:
             return
         
-        # 根据权重选择
-        selected_idx = self._select_by_weight(q_id, len(options))
+        # 检查每个选项是否有附加文本框，优先选择没有文本框的选项
+        options_with_textbox = []  # 有文本框的选项索引
+        options_without_textbox = []  # 没有文本框的选项索引
+        
+        for i, opt in enumerate(options):
+            try:
+                # 检查选项是否有关联的文本框
+                has_textbox = self._option_has_textbox(opt, element, i)
+                if has_textbox:
+                    options_with_textbox.append(i)
+                else:
+                    options_without_textbox.append(i)
+            except:
+                options_without_textbox.append(i)
+        
+        # 优先从没有文本框的选项中选择
+        if options_without_textbox:
+            if q_id in self.weights:
+                selected_idx = self._select_by_weight(q_id, len(options))
+                if selected_idx in options_with_textbox and options_without_textbox:
+                    selected_idx = random.choice(options_without_textbox)
+            else:
+                selected_idx = random.choice(options_without_textbox)
+        else:
+            # 所有选项都有文本框，随机选一个
+            selected_idx = self._select_by_weight(q_id, len(options)) if q_id in self.weights else random.randint(0, len(options) - 1)
         
         try:
             self._scroll_to_element(options[selected_idx])
             options[selected_idx].click()
             print(f"  选择第 {selected_idx + 1} 项")
         except:
-            # 使用 JS 点击
             self.driver.execute_script("arguments[0].click();", options[selected_idx])
+        
+        # 选择后检查并填写任何出现的文本框
+        self._fill_option_textbox(element)
     
     def _fill_multi_choice(self, q_id, element):
         """多选题"""
@@ -430,11 +556,50 @@ class SurveyFillerSelenium:
         if not options:
             return
         
-        # 选择 2-4 个选项
-        num_select = min(len(options), random.randint(2, min(4, len(options))))
+        # 检查是否有"其他"选项，记录其索引
+        other_keywords = ['其他', '其它', '以上都不是']
+        other_option_idx = -1
+        valid_options = []
         
-        # 根据权重选择多个
-        selected_indices = self._select_multiple_by_weight(q_id, len(options), num_select)
+        for i, opt in enumerate(options):
+            try:
+                opt_text = opt.text.strip()
+                is_other = any(kw in opt_text for kw in other_keywords)
+                if is_other:
+                    other_option_idx = i
+                else:
+                    valid_options.append(i)
+            except:
+                valid_options.append(i)
+        
+        # 解析题目要求的最少选择数量
+        min_select = 2  # 默认最少2项
+        try:
+            label = element.find_element(By.CSS_SELECTOR, '.field-label, .topichtml')
+            label_text = label.text
+            # 匹配 "最少选择X项" 或 "至少选择X项"
+            match = re.search(r'[最至]少选择(\d+)项', label_text)
+            if match:
+                min_select = int(match.group(1))
+        except:
+            pass
+        
+        # 确保选择数量满足要求，优先从非"其他"选项中选择
+        if len(valid_options) >= min_select:
+            num_select = min(len(valid_options), random.randint(max(2, min_select), min(5, len(valid_options))))
+            selected_indices = random.sample(valid_options, num_select)
+        else:
+            # 有效选项不够，需要包含"其他"
+            num_select = min(len(options), random.randint(max(2, min_select), min(5, len(options))))
+            selected_indices = self._select_multiple_by_weight(q_id, len(options), num_select)
+        
+        # 确保至少选择了要求的数量
+        if len(selected_indices) < min_select:
+            available = [i for i in range(len(options)) if i not in selected_indices]
+            while len(selected_indices) < min_select and available:
+                idx = random.choice(available)
+                selected_indices.append(idx)
+                available.remove(idx)
         
         for idx in selected_indices:
             try:
@@ -444,6 +609,9 @@ class SurveyFillerSelenium:
                 self.driver.execute_script("arguments[0].click();", options[idx])
         
         print(f"  选择了 {len(selected_indices)} 项")
+        
+        # 选择后检查并填写任何出现的文本框
+        self._fill_option_textbox(element)
     
     def _fill_dropdown(self, element):
         """下拉选择题"""
@@ -725,6 +893,78 @@ class SurveyFillerSelenium:
     
     # ==================== 辅助方法 ====================
     
+    def _option_has_textbox(self, option, element, option_idx):
+        """检查选项是否有关联的文本框"""
+        try:
+            # 方法1: 检查选项内部是否有文本框
+            inner_textbox = option.find_elements(By.CSS_SELECTOR, 'input[type="text"], textarea')
+            if inner_textbox:
+                return True
+            
+            # 方法2: 检查选项文本是否包含需要填写的关键词
+            opt_text = option.text.strip()
+            textbox_keywords = ['其他', '其它', '请说明', '请填写', '请注明', '具体', '（', '(']
+            if any(kw in opt_text for kw in textbox_keywords):
+                return True
+            
+            # 方法3: 检查选项后面是否紧跟文本框（通过相邻元素）
+            try:
+                # 问卷星的文本框通常在选项的同级或子级
+                option_id = option.get_attribute('for') or ''
+                if option_id:
+                    # 查找关联的文本框
+                    related_textbox = element.find_elements(By.CSS_SELECTOR, 
+                        f'input[id*="{option_id}"], input[name*="q{option_idx}"]')
+                    if related_textbox:
+                        return True
+            except:
+                pass
+            
+            return False
+        except:
+            return False
+    
+    def _fill_option_textbox(self, element):
+        """填写选项关联的文本框（选择后调用）"""
+        try:
+            # 查找所有可见的空文本框
+            textboxes = element.find_elements(By.CSS_SELECTOR, 
+                'input[type="text"], textarea, input.othertxt, input.otherText')
+            
+            for tb in textboxes:
+                try:
+                    if tb.is_displayed():
+                        current_value = tb.get_attribute('value') or ''
+                        if not current_value.strip():
+                            # 生成答案
+                            if self.use_ai and self.ai_generator:
+                                try:
+                                    # 获取题目文本作为上下文
+                                    q_text = element.text[:100] if element.text else "补充说明"
+                                    answer = self.ai_generator.generate_answer(q_text)
+                                    if not answer:
+                                        answer = "暂无补充"
+                                except:
+                                    answer = "暂无补充"
+                            else:
+                                default_answers = ["暂无补充", "无特殊情况", "正常", "一般情况"]
+                                answer = random.choice(default_answers)
+                            
+                            tb.clear()
+                            # 模拟打字
+                            for char in answer:
+                                tb.send_keys(char)
+                                time.sleep(random.uniform(0.02, 0.05))
+                            print(f"  填写附加文本框: {answer}")
+                except:
+                    continue
+        except:
+            pass
+    
+    def _fill_other_textbox(self, element):
+        """填写"其他"选项的文本框（兼容旧调用）"""
+        self._fill_option_textbox(element)
+    
     def _select_by_weight(self, q_id, num_options):
         """根据权重选择一个选项"""
         weights = self.weights.get(q_id, {})
@@ -810,6 +1050,9 @@ class SurveyFillerSelenium:
     def _submit(self):
         """提交问卷"""
         try:
+            # 提交前先检查是否有未填写的必填题
+            self._check_and_fill_missing()
+            
             # 查找提交按钮
             submit_selectors = [
                 '#submit_button',
@@ -842,38 +1085,281 @@ class SurveyFillerSelenium:
             self._scroll_to_element(submit_btn)
             self._human_delay(0.5, 1)
             
-            # 点击提交
-            try:
-                submit_btn.click()
-            except:
-                self.driver.execute_script("arguments[0].click();", submit_btn)
+            # 尝试最多3次提交
+            for attempt in range(3):
+                # 点击提交
+                try:
+                    submit_btn.click()
+                except:
+                    self.driver.execute_script("arguments[0].click();", submit_btn)
+                
+                print("✓ 点击提交按钮")
+                
+                # 等待响应
+                self._human_delay(1.5, 2.5)
+                
+                # 检查是否有错误提示弹窗（必填题未填等）
+                if self._handle_error_alert():
+                    print(f"  处理错误提示后重试 ({attempt + 1}/3)")
+                    self._human_delay(1, 2)
+                    continue
+                
+                # 检查验证码
+                captcha_handled = False
+                for i in range(3):
+                    if self._handle_captcha():
+                        print(f"  第{i+1}次验证码处理完成")
+                        captcha_handled = True
+                        self._human_delay(1, 2)
+                    else:
+                        break
+                
+                # 如果处理了验证码，可能需要再次点击提交
+                if captcha_handled:
+                    try:
+                        submit_btn = self.driver.find_element(By.CSS_SELECTOR, '#submit_button, #ctlNext, .submitbtn')
+                        if submit_btn and submit_btn.is_displayed():
+                            submit_btn.click()
+                            self._human_delay(1.5, 2.5)
+                    except:
+                        pass
+                
+                # 等待页面跳转
+                self._human_delay(2, 3)
+                
+                # 检查提交结果
+                if self._check_submit_result():
+                    return True
+                
+                # 如果失败，检查是否还在问卷页面，可以重试
+                try:
+                    submit_btn = self.driver.find_element(By.CSS_SELECTOR, '#submit_button, #ctlNext, .submitbtn')
+                    if not submit_btn.is_displayed():
+                        break  # 按钮不可见，可能已经成功或出错
+                except:
+                    break  # 找不到按钮，退出重试
             
-            print("✓ 点击提交按钮")
-            
-            # 等待响应
-            self._human_delay(2, 4)
-            
-            # 检查是否有验证码
-            if self._handle_captcha():
-                self._human_delay(1, 2)
-            
-            # 检查提交结果
-            return self._check_submit_result()
+            return False
             
         except Exception as e:
             print(f"提交时出错: {e}")
             return False
     
-    def _handle_captcha(self):
-        """处理验证码"""
+    def _check_and_fill_missing(self):
+        """检查并填写遗漏的必填题"""
         try:
-            # 检查滑块验证码
+            # 查找带有错误标记的题目（问卷星会给未填的必填题加红色边框或提示）
+            error_fields = self.driver.find_elements(By.CSS_SELECTOR, 
+                '.field.error, .field.invalid, .field[style*="border-color: red"], div.field:has(.error-tip)')
+            
+            if not error_fields:
+                # 也检查是否有红色星号的必填题未填
+                required_fields = self.driver.find_elements(By.CSS_SELECTOR, 'div.field')
+                for field in required_fields:
+                    try:
+                        # 检查是否是必填题（有红色星号）
+                        label = field.find_element(By.CSS_SELECTOR, '.field-label, .topichtml')
+                        if '*' in label.text[:5]:  # 必填题通常以*开头
+                            # 检查是否已填写
+                            if not self._is_field_filled(field):
+                                error_fields.append(field)
+                    except:
+                        continue
+            
+            if error_fields:
+                print(f"发现 {len(error_fields)} 个未填写的题目，尝试补填...")
+                for field in error_fields:
+                    try:
+                        q_type = self._detect_question_type(field)
+                        q_id = field.get_attribute('id') or ''
+                        self._fill_question({
+                            'id': q_id,
+                            'index': 0,
+                            'text': '',
+                            'type': q_type,
+                            'element': field
+                        })
+                        self._human_delay(0.5, 1)
+                    except:
+                        continue
+        except Exception as e:
+            print(f"检查遗漏题目时出错: {e}")
+    
+    def _is_field_filled(self, field):
+        """检查题目是否已填写"""
+        try:
+            # 检查单选/多选是否有选中
+            selected = field.find_elements(By.CSS_SELECTOR, 
+                '.ui-radio-on, .ui-checkbox-on, input:checked, .jqradio.checked, .jqcheck.checked')
+            if selected:
+                return True
+            
+            # 检查文本框是否有内容
+            inputs = field.find_elements(By.CSS_SELECTOR, 'input[type="text"], textarea')
+            for inp in inputs:
+                if inp.get_attribute('value'):
+                    return True
+            
+            # 检查下拉框是否选择
+            selects = field.find_elements(By.CSS_SELECTOR, 'select')
+            for sel in selects:
+                if sel.get_attribute('value'):
+                    return True
+            
+            return False
+        except:
+            return True  # 出错时假设已填写
+    
+    def _handle_error_alert(self):
+        """处理错误提示弹窗（如必填题未填）"""
+        try:
+            # 问卷星常见的错误提示弹窗
+            alert_selectors = [
+                '.layui-layer',
+                '.layer-content',
+                '#layui-layer1',
+                '.jqalert',
+                '.alert-box',
+                '#alert_box',
+            ]
+            
+            for selector in alert_selectors:
+                try:
+                    alert = self.driver.find_element(By.CSS_SELECTOR, selector)
+                    if alert and alert.is_displayed():
+                        alert_text = alert.text
+                        print(f"  检测到提示: {alert_text[:50]}...")
+                        
+                        # 检查是否是必填题未填的提示
+                        if any(x in alert_text for x in ['必答', '必填', '请填写', '请选择', '至少选择', '请完成']):
+                            # 点击确定按钮关闭弹窗
+                            close_btns = alert.find_elements(By.CSS_SELECTOR, 
+                                'button, .layui-layer-btn0, .layui-layer-close, a.btn')
+                            for btn in close_btns:
+                                try:
+                                    if btn.is_displayed():
+                                        btn.click()
+                                        self._human_delay(0.3, 0.5)
+                                        break
+                                except:
+                                    continue
+                            
+                            # 尝试定位并填写未填的题目
+                            self._check_and_fill_missing()
+                            return True
+                except:
+                    continue
+            
+            return False
+        except:
+            return False
+    
+    def _handle_captcha(self):
+        """处理验证码（包括问卷星智能验证）"""
+        try:
+            # 1. 检查问卷星智能验证弹窗 - "请完成安全验证" 对话框
+            # 弹窗内有 "点击开始智能验证" 按钮
+            smart_verify_selectors = [
+                # 问卷星智能验证按钮（根据截图）
+                'div.wjx-captcha-wrap',
+                '.captcha-wrap',
+                '#captcha_div',
+                'div[class*="captcha"]',
+                # 验证弹窗
+                '.layui-layer',
+                '.sm-pop',
+            ]
+            
+            # 先检查是否有验证弹窗
+            for selector in smart_verify_selectors:
+                try:
+                    captcha_wrap = self.driver.find_element(By.CSS_SELECTOR, selector)
+                    if captcha_wrap and captcha_wrap.is_displayed():
+                        print(f"检测到验证弹窗: {selector}")
+                        
+                        # 查找 "点击开始智能验证" 按钮
+                        verify_btn_selectors = [
+                            '#SM_BTN_1',  # 数美验证按钮
+                            '.sm-btn',
+                            '.sm-btn-default',
+                            '#sm-btn',
+                            'button[class*="sm"]',
+                            '#rectMask',
+                            '.rectMask',
+                            'div[id*="SM_"]',
+                            # 通用按钮
+                            'button',
+                            'a.btn',
+                        ]
+                        
+                        for btn_selector in verify_btn_selectors:
+                            try:
+                                btns = captcha_wrap.find_elements(By.CSS_SELECTOR, btn_selector)
+                                for btn in btns:
+                                    if btn.is_displayed() and btn.is_enabled():
+                                        btn_text = btn.text or btn.get_attribute('value') or ''
+                                        if '验证' in btn_text or '开始' in btn_text or not btn_text:
+                                            print(f"点击验证按钮: {btn_text or btn_selector}")
+                                            
+                                            # 使用 ActionChains 模拟真实点击
+                                            actions = ActionChains(self.driver)
+                                            actions.move_to_element(btn)
+                                            actions.pause(random.uniform(0.1, 0.3))
+                                            actions.click()
+                                            actions.perform()
+                                            
+                                            # 等待验证完成
+                                            time.sleep(4)
+                                            
+                                            # 检查验证是否成功（弹窗消失）
+                                            try:
+                                                if not captcha_wrap.is_displayed():
+                                                    print("✓ 智能验证完成，弹窗已关闭")
+                                                    return True
+                                            except:
+                                                print("✓ 智能验证完成")
+                                                return True
+                            except:
+                                continue
+                        break
+                except:
+                    continue
+            
+            # 2. 直接在页面上查找验证按钮（不在弹窗内）
+            page_verify_selectors = [
+                '#SM_BTN_1',
+                '.sm-btn',
+                '#rectMask',
+                '.rectMask',
+                'div[class*="captcha"] button',
+                'div[class*="verify"] button',
+            ]
+            
+            for selector in page_verify_selectors:
+                try:
+                    btn = self.driver.find_element(By.CSS_SELECTOR, selector)
+                    if btn and btn.is_displayed():
+                        print(f"找到页面验证按钮: {selector}")
+                        
+                        actions = ActionChains(self.driver)
+                        actions.move_to_element(btn)
+                        actions.pause(random.uniform(0.2, 0.5))
+                        actions.click()
+                        actions.perform()
+                        
+                        time.sleep(4)
+                        print("✓ 点击验证按钮完成")
+                        return True
+                except:
+                    continue
+            
+            # 3. 检查滑块验证码
             slider_selectors = [
                 '.nc_iconfont.btn_slide',
                 '#nc_1_n1z',
                 '.slider',
                 '.slidetounlock',
-                '[class*="slide"]',
+                '#nc_1__scale_text',
             ]
             
             for selector in slider_selectors:
@@ -885,7 +1371,7 @@ class SurveyFillerSelenium:
                 except:
                     continue
             
-            # 检查点选验证码
+            # 4. 检查点选验证码（无法自动处理）
             click_captcha = self.driver.find_elements(By.CSS_SELECTOR, '.geetest_item, .captcha-item')
             if click_captcha:
                 print("检测到点选验证码，无法自动处理")
@@ -893,7 +1379,8 @@ class SurveyFillerSelenium:
             
             return False
             
-        except:
+        except Exception as e:
+            print(f"验证码处理出错: {e}")
             return False
     
     def _slide_captcha(self, slider):
@@ -948,58 +1435,205 @@ class SurveyFillerSelenium:
             return False
     
     def _check_submit_result(self):
-        """检查提交结果"""
+        """检查提交结果 - 严格判断"""
         try:
-            # 等待页面跳转
-            time.sleep(3)
+            # 等待页面跳转（增加等待时间）
+            time.sleep(4)
             
             current_url = self.driver.current_url
             print(f"提交后URL: {current_url}")
             
-            # 检查URL是否跳转到完成页面
-            url_success = any([
-                'complete' in current_url.lower(),
-                'finish' in current_url.lower(),
-                'success' in current_url.lower(),
-                'jqmore' in current_url.lower(),  # 问卷星完成页
-            ])
+            # 保存原始URL用于比较
+            original_url_base = current_url.split('?')[0].split('#')[0]
             
-            if url_success:
-                print("✓ 问卷提交成功！(URL跳转)")
+            # 问卷星成功提交后的URL特征（严格匹配）
+            # 成功: https://www.wjx.cn/wjx/join/completemobile2.aspx?...
+            # 失败: 还在原页面 https://v.wjx.cn/vm/xxx.aspx 或 https://www.wjx.cn/vm/xxx.aspx
+            
+            success_url_patterns = [
+                'completemobile2.aspx',  # 问卷星移动端完成页
+                'complete.aspx',         # 问卷星PC端完成页
+                'completemobile.aspx',   # 另一种完成页
+                '/join/complete',        # 完成页路径
+                'jqmore.aspx',           # 推荐更多问卷页（也是成功）
+            ]
+            
+            # 检查URL是否包含成功标志
+            url_has_success = any(pattern in current_url.lower() for pattern in success_url_patterns)
+            
+            # 检查URL是否还在问卷填写页面（失败标志）
+            still_on_survey = any([
+                '/vm/' in current_url,           # 问卷填写页
+                '/vj/' in current_url,           # 另一种问卷页
+                current_url.endswith('.aspx#'),  # 还在原页面
+                current_url.endswith('.aspx'),   # 还在原页面（无hash）
+            ]) and not url_has_success
+            
+            if url_has_success:
+                print("✓ 问卷提交成功！(URL已跳转到完成页)")
                 return True
+            
+            if still_on_survey:
+                print("✗ 提交失败，URL仍在问卷页面")
+                # 尝试诊断失败原因
+                self._diagnose_submit_failure()
             
             # 检查页面内容
             try:
                 body_text = self.driver.find_element(By.TAG_NAME, 'body').text
-                print(f"页面内容前100字: {body_text[:100]}...")
+                print(f"页面内容前200字: {body_text[:200]}...")
                 
                 # 成功标志
-                success_keywords = ['感谢', '提交成功', '问卷已提交', '答卷完成', '您已完成', '谢谢参与']
-                if any(x in body_text for x in success_keywords):
-                    print("✓ 问卷提交成功！")
+                success_keywords = ['感谢您的参与', '提交成功', '问卷已提交', '答卷完成', '您已完成本次答卷', '谢谢您的参与']
+                
+                # 失败标志（更精确，避免误判）
+                fail_indicators = {
+                    '验证码': '需要验证码',
+                    '请完成验证': '需要完成验证',
+                    '智能验证': '触发智能验证',
+                    '滑动验证': '需要滑动验证',
+                    '必答题': '有必答题未填',
+                    '请选择': '有选择题未填',
+                    '请填写': '有填空题未填',
+                    '至少选择': '多选题选择数量不足',
+                }
+                
+                has_success = any(x in body_text for x in success_keywords)
+                
+                # 检查具体的失败原因
+                fail_reason = None
+                for keyword, reason in fail_indicators.items():
+                    if keyword in body_text:
+                        fail_reason = reason
+                        break
+                
+                # 只有明确成功才算成功
+                if has_success and not fail_reason:
+                    print("✓ 问卷提交成功！(页面内容确认)")
                     return True
                 
-                # 失败标志
-                fail_keywords = ['验证码', '请完成验证', '请点击', '智能验证', '滑动验证', '请先完成']
-                if any(x in body_text for x in fail_keywords):
-                    print("✗ 提交失败，需要验证码")
+                if fail_reason:
+                    print(f"✗ 提交失败原因: {fail_reason}")
                     return False
                 
-                # 还在原页面（没有跳转）
-                if '提交' in body_text and ('问卷' in body_text or '题' in body_text):
-                    print("✗ 提交失败，仍在问卷页面")
+                # 如果还在问卷页面（有题目内容），也算失败
+                if still_on_survey and ('你的' in body_text or '请选择' in body_text or '*' in body_text[:100]):
+                    print("✗ 提交失败，页面仍显示问卷内容")
                     return False
+                
+                # 检查是否还有提交按钮（说明还在问卷页）
+                try:
+                    submit_btn = self.driver.find_element(By.CSS_SELECTOR, '#submit_button, #ctlNext, .submitbtn')
+                    if submit_btn and submit_btn.is_displayed():
+                        print("✗ 提交失败，提交按钮仍然可见")
+                        return False
+                except:
+                    pass  # 没找到提交按钮，可能已经成功
                     
             except Exception as e:
                 print(f"获取页面内容失败: {e}")
             
-            # 不确定，返回失败（更保守）
+            # 最终判断：如果URL没变化，肯定失败
+            if still_on_survey:
+                print("✗ 提交失败，确认仍在问卷页面")
+                return False
+            
+            # 不确定的情况，保守处理为失败
             print("? 提交结果不确定，标记为失败")
             return False
             
         except Exception as e:
             print(f"检查结果出错: {e}")
             return False
+    
+    def _diagnose_submit_failure(self):
+        """诊断提交失败的原因，并保存截图"""
+        try:
+            print("--- 诊断提交失败原因 ---")
+            
+            # 0. 保存失败截图
+            screenshot_path = self._save_failure_screenshot()
+            if screenshot_path:
+                print(f"  ★ 失败截图已保存: {screenshot_path}")
+            
+            # 1. 检查是否有错误提示弹窗
+            alert_selectors = ['.layui-layer', '.jqalert', '#alert_box', '.alert-box']
+            for selector in alert_selectors:
+                try:
+                    alert = self.driver.find_element(By.CSS_SELECTOR, selector)
+                    if alert and alert.is_displayed():
+                        print(f"  发现弹窗: {alert.text[:100]}")
+                except:
+                    continue
+            
+            # 2. 检查是否有验证码
+            captcha_selectors = ['#rectMask', '.sm-btn', '#nc_1_n1z', '.geetest', '[class*="captcha"]']
+            for selector in captcha_selectors:
+                try:
+                    captcha = self.driver.find_element(By.CSS_SELECTOR, selector)
+                    if captcha and captcha.is_displayed():
+                        print(f"  发现验证码元素: {selector}")
+                except:
+                    continue
+            
+            # 3. 检查未填写的必填题
+            try:
+                # 查找带红色边框或错误样式的题目
+                error_fields = self.driver.find_elements(By.CSS_SELECTOR, 
+                    '.field.error, .field[style*="red"], .field:has(.error-tip), .divalidate')
+                if error_fields:
+                    print(f"  发现 {len(error_fields)} 个可能未填写的题目")
+                    for field in error_fields[:3]:  # 只显示前3个
+                        try:
+                            field_id = field.get_attribute('id')
+                            print(f"    - {field_id}")
+                        except:
+                            pass
+            except:
+                pass
+            
+            # 4. 检查页面是否有错误提示文字
+            try:
+                body_text = self.driver.find_element(By.TAG_NAME, 'body').text
+                error_patterns = ['请填写', '请选择', '必答', '至少', '验证', '错误', '失败']
+                for pattern in error_patterns:
+                    if pattern in body_text:
+                        # 找到包含该文字的具体位置
+                        idx = body_text.find(pattern)
+                        context = body_text[max(0, idx-20):idx+50]
+                        print(f"  页面包含 '{pattern}': ...{context}...")
+                        break
+            except:
+                pass
+            
+            print("--- 诊断结束 ---")
+        except Exception as e:
+            print(f"诊断出错: {e}")
+    
+    def _save_failure_screenshot(self):
+        """保存失败时的截图"""
+        try:
+            # 创建截图目录
+            screenshot_dir = os.path.join(os.path.dirname(__file__), '..', '..', 'failure_screenshots')
+            os.makedirs(screenshot_dir, exist_ok=True)
+            
+            # 生成文件名（时间戳）
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f"submit_fail_{timestamp}.png"
+            filepath = os.path.join(screenshot_dir, filename)
+            
+            # 保存截图
+            self.driver.save_screenshot(filepath)
+            
+            # 同时保存页面HTML（方便调试）
+            html_path = filepath.replace('.png', '.html')
+            with open(html_path, 'w', encoding='utf-8') as f:
+                f.write(self.driver.page_source)
+            
+            return filepath
+        except Exception as e:
+            print(f"保存截图失败: {e}")
+            return None
     
     def close(self):
         """关闭浏览器"""
