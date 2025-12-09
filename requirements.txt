@@ -9,6 +9,10 @@ python-dotenv>=1.0.0
 pymysql>=1.1.0
 psycopg2-binary>=2.9.0
 
+# 浏览器自动化（支持验证码）
+selenium>=4.15.0
+undetected-chromedriver>=3.5.0
+
 # HTTP请求和网页解析
 requests>=2.31.0
 beautifulsoup4>=4.12.0

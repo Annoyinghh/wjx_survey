@@ -26,16 +26,16 @@ class AIAnswerGenerator:
                 "messages": [
                     {
                         "role": "system",
-                        "content": "你是一个问卷填写助手，请根据问题生成合理的回答。回答要简洁、真实、符合实际情况。"
+                        "content": "你是一个问卷填写助手。请直接给出简短的答案，不要解释，不要加前缀。例如问'生活费多少'直接回答'1500元'。"
                     },
                     {
                         "role": "user",
-                        "content": f"请根据以下问题生成一个合理的回答：{question}"
+                        "content": f"问题：{question}\n请直接给出简短答案（10字以内）："
                     }
                 ],
                 "temperature": 0.7,
                 "top_k": 4,
-                "max_tokens": 6
+                "max_tokens": 30
             }
             
             print(f"发送请求: {json.dumps(data, ensure_ascii=False, indent=2)}")

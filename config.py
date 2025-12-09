@@ -44,5 +44,5 @@ else:
 SECRET_KEY = os.getenv('SECRET_KEY', 'wjx_survey_secret_key')
 DEBUG = os.getenv('DEBUG', 'True').lower() == 'true' if ENV == 'local' else False
 
-# 问卷填写器使用 HTTP 模式（云端兼容）
-print(f"[CONFIG] 填写器模式: HTTP")
+# 问卷填写器使用 selenium  模式（云端兼容）
+print(f"[CONFIG] 填写器模式: selenium ")

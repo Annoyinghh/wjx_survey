@@ -1,9 +1,10 @@
 from flask import Flask, render_template, request, jsonify, session
 from user import user_bp, init_db
 from config import DB_TYPE, DB_CONFIG
-from survey_filler_http import SurveyFillerHTTP as SurveyFiller
+from survey_filler_selenium import SurveyFillerSelenium as SurveyFiller
 from survey_parser_http import SurveyParserHTTP as SurveyParser
 import json
+import time
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
@@ -12,7 +13,7 @@ import os
 from dotenv import load_dotenv
 
 load_dotenv()
-print("使用 HTTP 模式（云端兼容）")
+print("使用 Selenium + undetected-chromedriver 模式")
 print(f"数据库类型: {DB_TYPE}")
 
 # 初始化数据库（创建表和默认管理员）
@@ -224,11 +225,17 @@ def submit():
         def run_fill_tasks():
             try:
                 if count > 1:
-                    max_workers = min(count, 3)
-                    print(f"使用 {max_workers} 个并发线程")
+                    # 限制并发数为2-3个，避免同时启动太多浏览器导致网络错误
+                    max_workers = min(count, 2)
+                    print(f"使用 {max_workers} 个并发线程（限制并发避免网络错误）")
                     
                     with ThreadPoolExecutor(max_workers=max_workers) as pool:
-                        futures = [pool.submit(fill_single_survey, i+1) for i in range(count)]
+                        futures = []
+                        for i in range(count):
+                            # 每个任务之间间隔1-2秒，避免同时请求ChromeDriver
+                            if i > 0:
+                                time.sleep(1.5)
+                            futures.append(pool.submit(fill_single_survey, i+1))
                         
                         for future in as_completed(futures):
                             try:
@@ -350,15 +357,17 @@ def get_points_log():
 @app.route('/admin/users', methods=['GET'])
 def admin_get_users():
     """获取所有用户列表"""
+    print(f"[DEBUG] /admin/users 被调用, admin_id={session.get('admin_id')}")
     if not session.get('admin_id'):
+        print("[DEBUG] 无权限，admin_id为空")
         return jsonify({'status': 'error', 'message': '无权限，请使用管理员账号登录'}), 403
     
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute('SELECT id, email, username, points, last_signin, created_at FROM users ORDER BY id DESC')
+            cur.execute('SELECT id, email, username, role, points, last_signin, created_at FROM users ORDER BY id DESC')
             users = cur.fetchall()
-            keys = ['id', 'email', 'username', 'points', 'last_signin', 'created_at']
+            keys = ['id', 'email', 'username', 'role', 'points', 'last_signin', 'created_at']
             return jsonify({
                 'status': 'success',
                 'data': [dict(zip(keys, u)) for u in users]
@@ -492,3 +501,4 @@ if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     debug = os.environ.get('FLASK_ENV') == 'development'
     app.run(host='0.0.0.0', port=port, debug=debug)
+ 

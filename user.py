@@ -67,6 +67,8 @@ def init_db():
             email VARCHAR(128) UNIQUE NOT NULL,
             username VARCHAR(64) NOT NULL,
             password VARCHAR(128) NOT NULL,
+            phone VARCHAR(20),
+            role VARCHAR(20) DEFAULT 'user',
             points INT DEFAULT 0,
             last_signin DATE,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -116,6 +118,8 @@ def init_db():
             email VARCHAR(128) UNIQUE NOT NULL,
             username VARCHAR(64) NOT NULL,
             password VARCHAR(128) NOT NULL,
+            phone VARCHAR(20),
+            role VARCHAR(20) DEFAULT 'user',
             points INT DEFAULT 0,
             last_signin DATE,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
