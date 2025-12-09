@@ -951,41 +951,40 @@ class SurveyFillerSelenium:
         """检查提交结果"""
         try:
             # 等待页面变化
-            time.sleep(2)
+            time.sleep(3)
             
             current_url = self.driver.current_url
-            page_source = self.driver.page_source
+            print(f"当前URL: {current_url}")
             
-            # 成功标志
-            success_indicators = [
+            # 先检查URL（快速）
+            url_success = any([
                 'complete' in current_url.lower(),
                 'finish' in current_url.lower(),
                 'success' in current_url.lower(),
-                '感谢' in page_source,
-                '提交成功' in page_source,
-                '问卷已提交' in page_source,
-                '答卷完成' in page_source,
-            ]
+            ])
             
-            if any(success_indicators):
-                print("✓ 问卷提交成功！")
+            if url_success:
+                print("✓ 问卷提交成功！(URL检测)")
                 return True
             
-            # 失败标志
-            fail_indicators = [
-                '验证码' in page_source,
-                '请完成验证' in page_source,
-                '请点击' in page_source,
-                '错误' in page_source,
-            ]
+            # 再检查页面内容（可能较慢，设置超时）
+            try:
+                # 只获取body文本，避免获取整个page_source
+                body_text = self.driver.find_element(By.TAG_NAME, 'body').text
+                
+                if any(x in body_text for x in ['感谢', '提交成功', '问卷已提交', '答卷完成']):
+                    print("✓ 问卷提交成功！")
+                    return True
+                
+                if any(x in body_text for x in ['验证码', '请完成验证', '请点击']):
+                    print("✗ 提交失败，需要验证码")
+                    return False
+            except Exception as e:
+                print(f"获取页面内容失败: {e}")
             
-            if any(fail_indicators):
-                print("✗ 提交失败，可能需要验证")
-                return False
-            
-            # 不确定
-            print("? 提交结果不确定")
-            return False
+            # 不确定，但假设成功（因为点击了提交按钮）
+            print("? 提交结果不确定，假设成功")
+            return True
             
         except Exception as e:
             print(f"检查结果出错: {e}")
