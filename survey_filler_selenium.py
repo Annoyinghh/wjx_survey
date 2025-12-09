@@ -950,41 +950,52 @@ class SurveyFillerSelenium:
     def _check_submit_result(self):
         """检查提交结果"""
         try:
-            # 等待页面变化
+            # 等待页面跳转
             time.sleep(3)
             
             current_url = self.driver.current_url
-            print(f"当前URL: {current_url}")
+            print(f"提交后URL: {current_url}")
             
-            # 先检查URL（快速）
+            # 检查URL是否跳转到完成页面
             url_success = any([
                 'complete' in current_url.lower(),
                 'finish' in current_url.lower(),
                 'success' in current_url.lower(),
+                'jqmore' in current_url.lower(),  # 问卷星完成页
             ])
             
             if url_success:
-                print("✓ 问卷提交成功！(URL检测)")
+                print("✓ 问卷提交成功！(URL跳转)")
                 return True
             
-            # 再检查页面内容（可能较慢，设置超时）
+            # 检查页面内容
             try:
-                # 只获取body文本，避免获取整个page_source
                 body_text = self.driver.find_element(By.TAG_NAME, 'body').text
+                print(f"页面内容前100字: {body_text[:100]}...")
                 
-                if any(x in body_text for x in ['感谢', '提交成功', '问卷已提交', '答卷完成']):
+                # 成功标志
+                success_keywords = ['感谢', '提交成功', '问卷已提交', '答卷完成', '您已完成', '谢谢参与']
+                if any(x in body_text for x in success_keywords):
                     print("✓ 问卷提交成功！")
                     return True
                 
-                if any(x in body_text for x in ['验证码', '请完成验证', '请点击']):
+                # 失败标志
+                fail_keywords = ['验证码', '请完成验证', '请点击', '智能验证', '滑动验证', '请先完成']
+                if any(x in body_text for x in fail_keywords):
                     print("✗ 提交失败，需要验证码")
                     return False
+                
+                # 还在原页面（没有跳转）
+                if '提交' in body_text and ('问卷' in body_text or '题' in body_text):
+                    print("✗ 提交失败，仍在问卷页面")
+                    return False
+                    
             except Exception as e:
                 print(f"获取页面内容失败: {e}")
             
-            # 不确定，但假设成功（因为点击了提交按钮）
-            print("? 提交结果不确定，假设成功")
-            return True
+            # 不确定，返回失败（更保守）
+            print("? 提交结果不确定，标记为失败")
+            return False
             
         except Exception as e:
             print(f"检查结果出错: {e}")
