@@ -109,10 +109,62 @@ class SurveyFillerSelenium:
                 ]
                 options.add_argument(f'--user-agent={random.choice(user_agents)}')
                 
-                # Selenium 4.6+ 内置 selenium-manager，自动下载匹配的 ChromeDriver
-                print("使用 Selenium 内置驱动管理器...")
+                # 尝试多种方式初始化 WebDriver
+                self.driver = None
                 
-                self.driver = webdriver.Chrome(options=options)
+                # 方案1: 使用 webdriver-manager（推荐）
+                try:
+                    print("尝试使用 webdriver-manager...")
+                    from webdriver_manager.chrome import ChromeDriverManager
+                    from selenium.webdriver.chrome.service import Service
+                    
+                    service = Service(ChromeDriverManager().install())
+                    self.driver = webdriver.Chrome(service=service, options=options)
+                    print("✓ 使用 webdriver-manager 成功")
+                except ImportError:
+                    print("  webdriver-manager 未安装，尝试其他方案...")
+                except Exception as e:
+                    print(f"  webdriver-manager 失败: {e}")
+                
+                # 方案2: 使用 Selenium 内置驱动管理器
+                if not self.driver:
+                    try:
+                        print("尝试使用 Selenium 内置驱动管理器...")
+                        self.driver = webdriver.Chrome(options=options)
+                        print("✓ Selenium 内置驱动管理器成功")
+                    except Exception as e:
+                        print(f"  Selenium 内置驱动管理器失败: {e}")
+                
+                # 方案3: 手动指定 ChromeDriver 路径
+                if not self.driver:
+                    chromedriver_paths = [
+                        'chromedriver',
+                        'chromedriver.exe',
+                        os.path.join(os.path.dirname(__file__), 'chromedriver'),
+                        os.path.join(os.path.dirname(__file__), 'chromedriver.exe'),
+                        r'C:\chromedriver.exe',
+                        '/usr/local/bin/chromedriver',
+                    ]
+                    
+                    for driver_path in chromedriver_paths:
+                        try:
+                            if os.path.exists(driver_path) or driver_path in ['chromedriver', 'chromedriver.exe']:
+                                print(f"尝试使用 ChromeDriver: {driver_path}")
+                                service = Service(driver_path)
+                                self.driver = webdriver.Chrome(service=service, options=options)
+                                print(f"✓ 使用 ChromeDriver {driver_path} 成功")
+                                break
+                        except Exception as e:
+                            continue
+                
+                # 如果所有方案都失败
+                if not self.driver:
+                    raise Exception(
+                        "无法初始化 ChromeDriver。请尝试以下方案之一:\n"
+                        "1. 安装 webdriver-manager: pip install webdriver-manager\n"
+                        "2. 下载 ChromeDriver: https://chromedriver.chromium.org/\n"
+                        "3. 将 chromedriver 放在项目目录或系统 PATH 中"
+                    )
                 self.wait = WebDriverWait(self.driver, 20)
                 
                 # 【关键】在页面加载前注入反检测脚本
