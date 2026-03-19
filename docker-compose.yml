@@ -1,0 +1,72 @@
+version: '3.8'
+
+services:
+  # PostgreSQL 数据库
+  postgres:
+    image: postgres:15-alpine
+    container_name: wjx_postgres
+    restart: always
+    environment:
+      POSTGRES_DB: wjx_survey
+      POSTGRES_USER: wjx_user
+      POSTGRES_PASSWORD: wjx_password_2024
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - wjx_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wjx_user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Web 应用
+  web:
+    build: .
+    container_name: wjx_web
+    restart: always
+    ports:
+      - "5000:5000"
+    environment:
+      # 数据库配置
+      DATABASE_URL: postgresql://wjx_user:wjx_password_2024@postgres:5432/wjx_survey
+
+      # Flask 配置
+      FLASK_ENV: production
+      SECRET_KEY: ${SECRET_KEY:-your-secret-key-change-this}
+
+      # 代理配置
+      USE_PROXY: ${USE_PROXY:-true}
+      MIN_PROXIES: ${MIN_PROXIES:-10}
+      MAX_PROXIES: ${MAX_PROXIES:-50}
+
+      # AI 配置（可选）
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+    volumes:
+      - ./logs:/app/logs
+      - ./failure_screenshots:/app/failure_screenshots
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - wjx_network
+    command: >
+      sh -c "
+        echo '等待数据库启动...' &&
+        sleep 5 &&
+        echo '初始化数据库...' &&
+        python init_postgres_db.py &&
+        echo '启动 Web 服务...' &&
+        python app.py
+      "
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  wjx_network:
+    driver: bridge
